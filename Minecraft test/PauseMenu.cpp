@@ -4,6 +4,10 @@
 #include "Renderer.h"
 #include "World.h"
 
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#include <windows.h>
+
 #include "imgui.h"
 
 #include <cmath>
@@ -238,6 +242,59 @@ void gameMenuTickLoading() {
         paused = false;
         cameraResetMouse();
     }
+}
+
+static bool gTitleDrag = false;
+static int gTitleDragX = 0;
+static int gTitleDragY = 0;
+static const float kTitleBarH = 30.0f;
+
+static void titleBarDrag(GLFWwindow* window, const PauseMenuState& state) {
+    if (state.isFullscreen || !gTitleDrag) return;
+    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) != GLFW_PRESS) {
+        gTitleDrag = false;
+        return;
+    }
+    POINT p;
+    GetCursorPos(&p);
+    HWND hwnd = glfwGetWin32Window(window);
+    RECT rc;
+    GetWindowRect(hwnd, &rc);
+    MoveWindow(hwnd, p.x - gTitleDragX, p.y - gTitleDragY, rc.right - rc.left, rc.bottom - rc.top, TRUE);
+}
+
+void titleBarRender(GLFWwindow* window, int width, int height, const PauseMenuState& state) {
+    if (state.isFullscreen) {
+        gTitleDrag = false;
+        return;
+    }
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2((float)width, kTitleBarH), ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.84f, 0.38f, 0.09f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.71f, 0.24f, 0.24f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.82f, 0.28f, 0.28f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.62f, 0.18f, 0.18f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 4.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::Begin("##TerraTitle", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("TerraEngine");
+    ImGui::SameLine((float)width - 36.0f);
+    if (ImGui::Button("X", ImVec2(26.0f, 22.0f)))
+        glfwSetWindowShouldClose(window, GLFW_TRUE);
+    bool overBar = ImGui::IsWindowHovered() && !ImGui::IsItemHovered();
+    if (overBar && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        double mx = 0.0, my = 0.0;
+        glfwGetCursorPos(window, &mx, &my);
+        gTitleDrag = true;
+        gTitleDragX = (int)mx;
+        gTitleDragY = (int)my;
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(4);
+    titleBarDrag(window, state);
 }
 
 void pauseMenuUpdateInput(GLFWwindow* window, PauseMenuState& state) {

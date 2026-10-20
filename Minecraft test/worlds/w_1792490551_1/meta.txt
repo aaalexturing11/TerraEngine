@@ -1,5 +1,5 @@
 name=Segundo mundo
 seed=1245505185
-sx=-154
-sy=72
-sz=356
+sx=-140
+sy=77
+sz=366

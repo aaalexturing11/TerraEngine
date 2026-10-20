@@ -43,7 +43,7 @@ void worldSetSeed(unsigned seed);
 unsigned worldGetSeed();
 void worldReset();
 void initializeWorld();
-void worldStreamAround(float x, float z);
+int worldStreamAround(float x, float z);
 int worldStreamStep(float x, float z, int inner, int budget);
 int worldMissingAround(float x, float z, int radius);
 bool worldFindSpawn(int& x, int& y, int& z);

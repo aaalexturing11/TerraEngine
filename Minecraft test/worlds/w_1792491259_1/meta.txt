@@ -1,0 +1,5 @@
+name=Prueba de optimización
+seed=1805045461
+sx=-26
+sy=51
+sz=2

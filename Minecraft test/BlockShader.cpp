@@ -11,6 +11,7 @@
 
 static unsigned gOpaque = 0;
 static unsigned gWater = 0;
+static unsigned gPlantShadow = 0;
 static unsigned gShadowFbo = 0;
 static unsigned gShadowTex = 0;
 static glm::mat4 gShadowMat(1.0f);
@@ -97,13 +98,14 @@ float shadowVis(vec3 world, float ndl) {
     if (sc.w <= 0.0) return 1.0;
     vec3 p = sc.xyz / sc.w;
     if (p.x < 0.0 || p.y < 0.0 || p.x > 1.0 || p.y > 1.0) return 1.0;
+    float bias = 0.0012 + 0.012 * (1.0 - clamp(ndl, 0.0, 1.0));
     vec2 texel = vec2(1.0 / 1024.0);
     float sum = 0.0;
-    sum += (texture(uShadowMap, p.xy + vec2(-texel.x, -texel.y)).r + 0.0045 > p.z) ? 1.0 : 0.0;
-    sum += (texture(uShadowMap, p.xy + vec2(texel.x, -texel.y)).r + 0.0045 > p.z) ? 1.0 : 0.0;
-    sum += (texture(uShadowMap, p.xy + vec2(-texel.x, texel.y)).r + 0.0045 > p.z) ? 1.0 : 0.0;
-    sum += (texture(uShadowMap, p.xy + vec2(texel.x, texel.y)).r + 0.0045 > p.z) ? 1.0 : 0.0;
-    return mix(0.55, 1.0, sum * 0.25);
+    sum += (texture(uShadowMap, p.xy + vec2(-texel.x, -texel.y)).r + bias > p.z) ? 1.0 : 0.0;
+    sum += (texture(uShadowMap, p.xy + vec2(texel.x, -texel.y)).r + bias > p.z) ? 1.0 : 0.0;
+    sum += (texture(uShadowMap, p.xy + vec2(-texel.x, texel.y)).r + bias > p.z) ? 1.0 : 0.0;
+    sum += (texture(uShadowMap, p.xy + vec2(texel.x, texel.y)).r + bias > p.z) ? 1.0 : 0.0;
+    return sum * 0.25;
 }
 
 void main() {
@@ -113,10 +115,13 @@ void main() {
     float cau = vPack.z;
     float ao = vPack.w;
     float lamp = clamp(vLamp, 0.0, 1.0);
-    float ndl = max(dot(n, normalize(uSunDir)), 0.0);
+    vec3 sunD = normalize(uSunDir);
+    float ndl = max(dot(n, sunD), 0.0);
+    float wrap = clamp(ndl * 0.78 + 0.22, 0.0, 1.0);
     float ndm = max(dot(n, normalize(uMoonDir)), 0.0);
-    float vis = shadowVis(vWorld + n * 0.05, ndl);
-    float skyVis = smoothstep(0.2, 0.78, sky);
+    float vis = shadowVis(vWorld + n * 0.08, ndl);
+    float skyVis = mix(0.5, 1.0, smoothstep(0.2, 0.9, sky));
+    float hemi = clamp(n.y * 0.5 + 0.5, 0.0, 1.0);
     vec3 albedo = vAlbedo;
     float alpha = 1.0;
     if (vTex > 0.5) {
@@ -127,14 +132,17 @@ void main() {
         } else if (texel.a < 0.4) discard;
         albedo *= texel.rgb;
     }
-    vec3 indirect = albedo * (vec3(0.028) + uAmbient * skyVis + uSky * sky * 0.42) * ao;
-    vec3 lampCol = albedo * vec3(1.0, 0.62, 0.28) * lamp * 1.15;
-    vec3 sun = albedo * uSunColor * ndl * vis * skyVis * uSunAmt;
-    vec3 moon = albedo * uMoonColor * ndm * skyVis * ao;
+    vec3 skyFill = uSky * (0.10 + 0.34 * hemi) * skyVis;
+    vec3 groundFill = vec3(0.20, 0.14, 0.08) * (1.0 - hemi) * 0.28 * skyVis;
+    vec3 indirect = albedo * (skyFill + groundFill + uAmbient * skyVis) * ao;
+    vec3 lampCol = albedo * vec3(1.0, 0.58, 0.24) * lamp * 1.25;
+    vec3 sun = albedo * uSunColor * wrap * vis * skyVis * uSunAmt;
+    vec3 shadowSky = albedo * uSky * (1.0 - vis) * skyVis * 0.28 * uSunAmt;
+    vec3 moon = albedo * uMoonColor * ndm * (0.35 + 0.65 * hemi) * ao;
     float wave = 0.6 + 0.4 * sin(uTime * 2.5 + vWorld.x * 7.5 + vWorld.z * 6.5);
     vec3 caustics = vec3(0.55, 0.95, 0.90) * cau * wave * uSunAmt * skyVis * 0.85;
     vec3 glow = albedo * emit * 2.6;
-    vec3 col = indirect + lampCol + sun + moon + caustics + glow;
+    vec3 col = indirect + lampCol + sun + shadowSky + moon + caustics + glow;
     float fog = smoothstep(118.0, 168.0, length(vWorld.xz - uCam.xz));
     col = mix(col, uSky, fog);
     fragColor = vec4(col, alpha);
@@ -161,15 +169,6 @@ void main() {
     vAcross = gl_MultiTexCoord1.x;
     vLip = gl_MultiTexCoord1.y;
     vNormal = gl_Normal;
-    if (gl_Normal.y > 0.5) {
-        vec3 a = textureLod(uFft, p.xz / 73.0, 0.0).xyz;
-        vec3 b = textureLod(uFft, p.xz / 29.0 + vec2(0.37, 0.18), 0.0).xyz;
-        vec2 hUV = (p.xz - uHeightOrigin) / uWorld;
-        float occ = textureLod(uHeight, hUV, 0.0).g;
-        float edge = smoothstep(0.2, 0.9, occ);
-        float rip = textureLod(uRipple, hUV, 0.0).r;
-        p.y += (a.x * 0.42 + b.x * 0.28 + rip * 0.06) * edge;
-    }
     vWorld = p;
     gl_Position = gl_ModelViewProjectionMatrix * vec4(p, 1.0);
 }
@@ -204,46 +203,6 @@ float linearDepth(float d) {
     return (2.0 * 0.12 * 360.0) / (360.12 - z * (360.0 - 0.12));
 }
 
-float sunVis(vec3 world) {
-    if (uSunAmt < 0.08) return 0.0;
-    vec4 sc = uShadowMat * vec4(world, 1.0);
-    if (sc.w <= 0.0) return 1.0;
-    vec3 p = sc.xyz / sc.w;
-    if (p.x < 0.0 || p.y < 0.0 || p.x > 1.0 || p.y > 1.0) return 1.0;
-    float d = texture(uShadowMap, p.xy).r;
-    return (d + 0.0035 > p.z) ? 1.0 : 0.0;
-}
-
-vec3 waterGodRays(vec3 world, vec3 n, float thick) {
-    if (uSunAmt < 0.12 || thick < 1.15) return vec3(0.0);
-    vec3 sun = normalize(uSunDir);
-    float hit = max(dot(n, sun), 0.0);
-    if (hit < 0.02) return vec3(0.0);
-    float vis0 = sunVis(world + n * 0.10);
-    if (vis0 < 0.15) return vec3(0.0);
-    vec3 into = -sun;
-    float maxD = min(thick, 9.0);
-    float acc = 0.0;
-    for (int i = 1; i <= 3; ++i) {
-        float t = float(i) / 3.0 * maxD;
-        vec3 p = world + into * t;
-        float surfaceH = texture(uHeight, (p.xz - uHeightOrigin) / uWorld).r;
-        if (surfaceH < 0.08) continue;
-        float under = surfaceH - p.y;
-        if (under < 0.0) continue;
-        float vis = sunVis(p + vec3(0.0, 0.12, 0.0));
-        float beam = sin(p.x * 1.85 + p.z * 1.12 + uTime * 0.38);
-        beam *= sin(p.x * 0.52 - p.z * 0.74 + uTime * 0.21);
-        beam = smoothstep(0.12, 0.78, beam * 0.5 + 0.5);
-        float scatter = exp(-under * 0.20) * exp(-t * 0.07);
-        acc += vis * beam * scatter;
-    }
-    acc *= 0.33;
-    float viewAlign = pow(max(dot(normalize(uCam - world), sun), 0.0), 3.5);
-    float deep = clamp((thick - 1.1) / 4.2, 0.0, 1.0);
-    return vec3(0.62, 0.90, 1.0) * acc * uSunAmt * hit * (0.28 + 0.95 * viewAlign) * deep * 1.35;
-}
-
 void main() {
     vec3 geo = normalize(vNormal);
     bool surface = geo.y > 0.45;
@@ -273,48 +232,122 @@ void main() {
         return;
     }
 
-    vec2 uvA = vWorld.xz / 73.0;
-    vec2 uvB = vWorld.xz / 29.0 + vec2(0.37, 0.18);
-    float e = 0.018;
-    float hL = texture(uFft, uvA - vec2(e, 0.0)).x * 0.62 + texture(uFft, uvB - vec2(e, 0.0)).x * 0.38;
-    float hR = texture(uFft, uvA + vec2(e, 0.0)).x * 0.62 + texture(uFft, uvB + vec2(e, 0.0)).x * 0.38;
-    float hD = texture(uFft, uvA - vec2(0.0, e)).x * 0.62 + texture(uFft, uvB - vec2(0.0, e)).x * 0.38;
-    float hU = texture(uFft, uvA + vec2(0.0, e)).x * 0.62 + texture(uFft, uvB + vec2(0.0, e)).x * 0.38;
+    bool below = uCam.y < vWorld.y - 0.08;
+    vec3 L = normalize(uSunDir);
+    if (below) {
+        vec3 toSurf = normalize(vWorld - uCam);
+        float up = max(dot(toSurf, vec3(0.0, 1.0, 0.0)), 0.0);
+        float sun = pow(max(dot(toSurf, L), 0.0), 5.0);
+        vec3 windowCol = uSky * vec3(0.82, 0.93, 1.05);
+        vec3 waterCol = vec3(0.08, 0.42, 0.48);
+        vec3 col = mix(waterCol, windowCol, 0.35 + up * 0.55);
+        col += vec3(1.0, 0.97, 0.88) * sun * uSunAmt * 2.2;
+        float shaft = sin(vWorld.x * 0.35 + uTime * 0.5) * sin(vWorld.z * 0.28 - uTime * 0.32);
+        shaft = smoothstep(0.05, 0.65, shaft * 0.5 + 0.5);
+        col += vec3(0.65, 0.95, 0.88) * shaft * uSunAmt * (0.35 + sun);
+        fragColor = vec4(col, mix(0.72, 0.35, sun));
+        return;
+    }
+
+    vec2 uvA = vWorld.xz / 67.0;
+    float e = 0.02;
+    float hL = texture(uFft, uvA - vec2(e, 0.0)).x;
+    float hR = texture(uFft, uvA + vec2(e, 0.0)).x;
+    float hD = texture(uFft, uvA - vec2(0.0, e)).x;
+    float hU = texture(uFft, uvA + vec2(0.0, e)).x;
     float dist = length(vWorld.xz - uCam.xz);
-    float detail = 1.0 - smoothstep(36.0, 110.0, dist);
-    vec3 n = normalize(vec3((hL - hR) * detail, 1.05, (hD - hU) * detail));
+    float detail = 1.0 - smoothstep(40.0, 120.0, dist);
+    vec3 n = normalize(vec3((hL - hR) * detail, 1.15, (hD - hU) * detail));
     vec2 ruv = (vWorld.xz - uHeightOrigin) / max(uWorld, 1.0);
     float re = 1.5 / max(uWorld, 1.0);
     float hx = texture(uRipple, ruv + vec2(re, 0.0)).r - texture(uRipple, ruv - vec2(re, 0.0)).r;
     float hz = texture(uRipple, ruv + vec2(0.0, re)).r - texture(uRipple, ruv - vec2(0.0, re)).r;
-    n = normalize(n + vec3(-hx, 0.0, -hz) * detail);
+    n = normalize(n + vec3(-hx, 0.0, -hz) * detail * 0.8);
 
     vec3 view = normalize(uCam - vWorld);
     vec2 uv = gl_FragCoord.xy / vec2(textureSize(uScene, 0));
-    vec2 distort = n.xz * 0.012 * detail;
+    vec2 distort = n.xz * (0.004 + 0.006 * detail);
     vec2 texCoordRefract = clamp(uv + distort, vec2(0.001), vec2(0.999));
 
     float sceneD = texture(uDepth, uv).r;
     float thick = sceneD > 0.998 ? 14.0 : max(linearDepth(sceneD) - linearDepth(gl_FragCoord.z), 0.0);
-    float absorb = clamp(0.72 + thick * 0.06, 0.72, 0.96);
+    float shallow = 1.0 - smoothstep(0.35, 1.35, thick);
+    float absorb = mix(clamp(0.58 + thick * 0.045, 0.58, 0.94), 0.22, shallow);
 
-    vec3 L = normalize(uSunDir);
     vec3 H = normalize(L + view);
     float ndv = max(dot(n, view), 0.0);
-    float fresnel = 0.02 + 0.55 * pow(1.0 - ndv, 4.0);
+    float fresnel = 0.02 + 0.42 * pow(1.0 - ndv, 4.0);
 
-    vec3 deep = vec3(0.02, 0.18, 0.26);
+    vec3 deep = vec3(0.02, 0.20, 0.30);
     vec3 refr = mix(texture(uScene, texCoordRefract).rgb, deep, absorb);
-    vec3 sky = uSky * vec3(0.62, 0.82, 0.95);
-    vec3 col = mix(refr, sky, clamp(fresnel, 0.0, 0.72));
-    col += vec3(1.0, 0.98, 0.92) * pow(max(dot(n, H), 0.0), 80.0) * uSunAmt * 0.65;
+    vec3 sky = uSky * vec3(0.72, 0.88, 1.0);
+    vec3 col = mix(refr, sky, clamp(fresnel, 0.0, 0.62));
+    col += vec3(0.95, 0.98, 1.0) * pow(max(dot(n, H), 0.0), 64.0) * uSunAmt * 0.35;
+
+    if (thick > 2.4 && uSunAmt > 0.12) {
+        float shaft = sin(vWorld.x * 0.48 + vWorld.z * 0.27 + uTime * 0.40);
+        shaft *= sin(vWorld.x * 0.17 - vWorld.z * 0.36 + uTime * 0.22);
+        shaft = smoothstep(0.12, 0.78, shaft * 0.5 + 0.5);
+        float deepAmt = clamp((thick - 2.4) / 5.0, 0.0, 1.0);
+        col += vec3(0.45, 0.82, 0.78) * shaft * max(dot(n, L), 0.0) * uSunAmt * deepAmt * 0.42;
+    }
 
     float occ = texture(uHeight, ruv).g;
-    float shore = (1.0 - smoothstep(0.15, 0.72, occ)) * (1.0 - smoothstep(0.05, 1.3, thick));
-    col = mix(col, vec3(0.78, 0.92, 0.94), shore * 0.42);
+    float shore = (1.0 - smoothstep(0.15, 0.72, occ)) * shallow;
+    col = mix(col, vec3(0.72, 0.90, 0.92), shore * 0.28);
     float fog = smoothstep(118.0, 168.0, dist);
     col = mix(col, uSky, fog);
-    fragColor = vec4(col, 0.94);
+    float alpha = mix(0.90, 0.62, shallow);
+    fragColor = vec4(col, alpha);
+}
+)GLSL";
+
+static const char* kPlantShadowVs = R"GLSL(
+#version 330 compatibility
+out vec2 vUv;
+out float vTex;
+uniform float uTime;
+uniform vec3 uPlayer;
+uniform vec2 uPlayerVel;
+void main() {
+    vec3 p = gl_Vertex.xyz;
+    float wind = gl_MultiTexCoord2.w;
+    if (wind > 0.01) {
+        vec3 c = gl_MultiTexCoord2.xyz;
+        float gustX = sin(uTime * 0.7 + c.x * 0.16 + c.z * 0.12);
+        float gustZ = cos(uTime * 0.55 + c.z * 0.16 + c.x * 0.09);
+        float flutterX = sin(uTime * 1.8 + c.x * 1.6 + c.z * 0.7);
+        float flutterZ = cos(uTime * 1.45 + c.z * 1.5 + c.y * 0.4);
+        p.x += gustX * 0.035 + flutterX * 0.014 * wind;
+        p.z += gustZ * 0.03 + flutterZ * 0.014 * wind;
+        p.y += abs(gustX) * 0.008 * wind;
+        if (wind > 1.2) {
+            vec2 d = p.xz - uPlayer.xz;
+            float dist = length(d);
+            float h = clamp((p.y - (c.y - 0.5)) / 1.05, 0.0, 1.0);
+            float spd = length(uPlayerVel);
+            float push = smoothstep(1.35, 0.10, dist) * h * (0.40 + 0.60 * smoothstep(0.0, 3.2, spd));
+            vec2 dir = dist > 0.001 ? normalize(d) : vec2(1.0, 0.0);
+            float shake = sin(uTime * 17.0 + c.x * 4.4 + c.z * 3.2) * 0.11;
+            float sway = sin(uTime * 10.0 + dist * 7.0) * 0.07;
+            p.xz += dir * push * (0.38 + shake);
+            p.xz += vec2(-dir.y, dir.x) * push * sway;
+            p.y -= push * 0.10;
+        }
+    }
+    vUv = gl_MultiTexCoord1.xy;
+    vTex = gl_MultiTexCoord1.z;
+    gl_Position = gl_ModelViewProjectionMatrix * vec4(p, 1.0);
+}
+)GLSL";
+
+static const char* kPlantShadowFs = R"GLSL(
+#version 330 compatibility
+in vec2 vUv;
+in float vTex;
+uniform sampler2D uAlbedo;
+void main() {
+    if (vTex > 0.5 && texture(uAlbedo, vUv).a < 0.45) discard;
 }
 )GLSL";
 
@@ -326,7 +359,8 @@ static void bindShadowTexture() {
 bool initBlockShaders() {
     gOpaque = makeGlProgram(kOpaqueVs, kOpaqueFs);
     gWater = makeGlProgram(kWaterVs, kWaterFs);
-    if (!gOpaque || !gWater) return false;
+    gPlantShadow = makeGlProgram(kPlantShadowVs, kPlantShadowFs);
+    if (!gOpaque || !gWater || !gPlantShadow) return false;
 
     glGenTextures(1, &gShadowTex);
     glBindTexture(GL_TEXTURE_2D, gShadowTex);
@@ -366,7 +400,7 @@ void beginShadowPass(const DayNightLighting& light, const glm::vec3& focus) {
     glx.UseProgram(0);
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset(2.5f, 4.0f);
+    glPolygonOffset(1.6f, 3.0f);
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     glClear(GL_DEPTH_BUFFER_BIT);
 
@@ -408,6 +442,17 @@ void bindOpaqueShader(const DayNightLighting& light, float time) {
     glx.ActiveTexture(GL_TEXTURE1);
     glEnable(GL_TEXTURE_2D);
     glx.ActiveTexture(GL_TEXTURE0);
+}
+
+void bindPlantShadowShader(float time) {
+    glx.UseProgram(gPlantShadow);
+    auto loc = [&](const char* n) { return glx.GetUniformLocation(gPlantShadow, n); };
+    glm::vec3 pp = cameraPosition();
+    glm::vec3 pv = cameraVelocity();
+    glx.Uniform1f(loc("uTime"), time);
+    glx.Uniform3f(loc("uPlayer"), pp.x, pp.y, pp.z);
+    glx.Uniform2f(loc("uPlayerVel"), pv.x, pv.z);
+    glx.Uniform1i(loc("uAlbedo"), 1);
 }
 
 void bindWaterShader(const glm::mat4& viewProj, const glm::vec3& camPos, const glm::vec3& sky, const glm::vec3& sunDir, float sunAmt, float time) {

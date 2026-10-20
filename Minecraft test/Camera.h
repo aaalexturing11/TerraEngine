@@ -19,3 +19,4 @@ glm::vec3 cameraLookDirection();
 glm::vec3 cameraVelocity();
 glm::vec3 cameraBobOffset();
 float cameraFov();
+bool cameraEyesInWater();

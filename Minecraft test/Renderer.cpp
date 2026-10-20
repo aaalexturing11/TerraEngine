@@ -4,6 +4,7 @@
 #include "Camera.h"
 #include "FluidSolver.h"
 #include "World.h"
+#include "BlockShader.h"
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
@@ -547,56 +548,89 @@ static void buildChunk(int cx, int cz) {
         for (int x = x0; x <= x1; ++x) {
             float y00 = colH(x, z);
             if (y00 < 0.02f) continue;
-            float y10 = colH(x + 1, z);
-            float y11 = colH(x + 1, z + 1);
-            float y01 = colH(x, z + 1);
-            if (y10 < 0.02f) y10 = y00;
-            if (y01 < 0.02f) y01 = y00;
-            if (y11 < 0.02f) y11 = y00;
             float foam = 0.0f;
             if (!waterHasSurface(x - 1, z) || !waterHasSurface(x + 1, z)
                 || !waterHasSurface(x, z - 1) || !waterHasSurface(x, z + 1))
                 foam = 1.0f;
             float fx0 = (float)x, fz0 = (float)z, fx1 = fx0 + 1.0f, fz1 = fz0 + 1.0f;
-            pushWater(glm::vec3(fx0, y00, fz0), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
-            pushWater(glm::vec3(fx0, y01, fz1), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
-            pushWater(glm::vec3(fx1, y11, fz1), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
-            pushWater(glm::vec3(fx1, y10, fz0), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
+            float h = y00;
+            pushWater(glm::vec3(fx0, h, fz0), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
+            pushWater(glm::vec3(fx0, h, fz1), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
+            pushWater(glm::vec3(fx1, h, fz1), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
+            pushWater(glm::vec3(fx1, h, fz0), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
         }
     gCapWater = nullptr;
 }
 
 static int gFrame = 0;
 static int gMeshFrame = -1;
+static int gMeshBudget = 1;
+static std::unordered_map<unsigned long long, char> gPending;
 
 void beginFrameMeshes() { ++gFrame; }
 
+void setMeshBudget(int budget) {
+    gMeshBudget = budget < 0 ? 0 : budget;
+}
+
+static void queueMeshRect(int x0, int z0, int x1, int z1) {
+    int n = loadedChunkCount();
+    for (int i = 0; i < n; ++i) {
+        int cx, cz;
+        loadedChunkCoord(i, cx, cz);
+        if (cx * kChunk > x1 || (cx + 1) * kChunk - 1 < x0) continue;
+        if (cz * kChunk > z1 || (cz + 1) * kChunk - 1 < z0) continue;
+        gPending[meshKey(cx, cz)] = 1;
+    }
+}
+
 static void updateWorldMeshes() {
     int x0 = 0, z0 = 0, x1 = 0, z1 = 0;
-    bool dirty = consumeMeshDirty(x0, z0, x1, z1);
-    bool waterDirty = consumeWaterMeshDirty();
+    if (consumeMeshDirty(x0, z0, x1, z1))
+        queueMeshRect(x0, z0, x1, z1);
+    if (consumeWaterMeshDirty()) {
+        glm::vec3 cam = cameraPosition();
+        int ccx = (int)std::floor(cam.x / (float)kChunk);
+        int ccz = (int)std::floor(cam.z / (float)kChunk);
+        queueMeshRect((ccx - 1) * kChunk, (ccz - 1) * kChunk, (ccx + 2) * kChunk - 1, (ccz + 2) * kChunk - 1);
+    }
+
     int n = loadedChunkCount();
     glm::vec3 cam = cameraPosition();
     int ccx = (int)std::floor(cam.x / (float)kChunk);
     int ccz = (int)std::floor(cam.z / (float)kChunk);
     std::unordered_map<unsigned long long, char> keep;
-    int built = 0;
+    struct Job { int cx, cz, d; };
+    std::vector<Job> jobs;
+    jobs.reserve(8);
     for (int i = 0; i < n; ++i) {
         int cx, cz;
         loadedChunkCoord(i, cx, cz);
         unsigned long long k = meshKey(cx, cz);
         keep[k] = 1;
         bool missing = gMeshes.find(k) == gMeshes.end();
-        bool overlap = dirty && !(cx * kChunk > x1 || (cx + 1) * kChunk - 1 < x0
-            || cz * kChunk > z1 || (cz + 1) * kChunk - 1 < z0);
+        bool pending = gPending.find(k) != gPending.end();
+        if (!missing && !pending) continue;
         int adx = cx - ccx; if (adx < 0) adx = -adx;
         int adz = cz - ccz; if (adz < 0) adz = -adz;
-        int d = adx > adz ? adx : adz;
-        if (waterDirty && !dirty && d <= 5) overlap = true;
-        if (!missing && !overlap) continue;
-        if (d > 1 && built >= 2) continue;
-        buildChunk(cx, cz);
+        Job job;
+        job.cx = cx;
+        job.cz = cz;
+        job.d = adx > adz ? adx : adz;
+        jobs.push_back(job);
+    }
+    std::sort(jobs.begin(), jobs.end(), [](const Job& a, const Job& b) { return a.d < b.d; });
+    int cap = gMeshBudget;
+    if (cap < 1 && !jobs.empty() && jobs[0].d <= 1) cap = 1;
+    int built = 0;
+    for (size_t i = 0; i < jobs.size() && built < cap; ++i) {
+        buildChunk(jobs[i].cx, jobs[i].cz);
+        gPending.erase(meshKey(jobs[i].cx, jobs[i].cz));
         ++built;
+    }
+    for (auto it = gPending.begin(); it != gPending.end(); ) {
+        if (keep.find(it->first) == keep.end()) it = gPending.erase(it);
+        else ++it;
     }
     for (auto it = gMeshes.begin(); it != gMeshes.end(); ) {
         if (keep.find(it->first) == keep.end()) it = gMeshes.erase(it);
@@ -675,6 +709,7 @@ static void drawWaterMesh(const std::vector<MeshVert>& water) {
 
 void clearWorldMeshes() {
     gMeshes.clear();
+    gPending.clear();
 }
 
 int pumpWorldMeshes(int maxBuild) {
@@ -711,6 +746,11 @@ static void ensureMeshes() {
     updateWorldMeshes();
 }
 
+static bool plantShadowTex(unsigned tex) {
+    return tex && (tex == gBlockTex.tallGrass || tex == gBlockTex.poppy
+        || tex == gBlockTex.triteleia || tex == gBlockTex.triteleiaRed);
+}
+
 void renderShadowCasters(int renderRadiusXZ, int) {
     ensureMeshes();
     glEnable(GL_CULL_FACE);
@@ -719,6 +759,18 @@ void renderShadowCasters(int renderRadiusXZ, int) {
         if (chunkVisible(it->second.cx, it->second.cz, renderRadiusXZ))
             drawBatches(it->second.opaque, false);
     glDisable(GL_CULL_FACE);
+    int plantRadius = renderRadiusXZ < 36 ? renderRadiusXZ : 36;
+    bindPlantShadowShader((float)glfwGetTime());
+    for (auto it = gMeshes.begin(); it != gMeshes.end(); ++it) {
+        if (!chunkVisible(it->second.cx, it->second.cz, plantRadius)) continue;
+        for (const MeshBatch& batch : it->second.cutout) {
+            if (!plantShadowTex(batch.tex) || batch.v.empty()) continue;
+            bindAlbedo(batch.tex);
+            bindMeshArrays(batch.v.data());
+            glDrawArrays(GL_QUADS, 0, (GLsizei)batch.v.size());
+            unbindMeshArrays();
+        }
+    }
 }
 
 void renderOpaqueBlocks(int renderRadiusXZ, int) {

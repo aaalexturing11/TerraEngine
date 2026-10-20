@@ -460,6 +460,10 @@ void fluidImpact(float x, float y, float z, float speed, float mass) {
     }
 }
 
+static bool gAllowHeavy = true;
+
+void fluidSetHeavy(bool enabled) { gAllowHeavy = enabled; }
+
 void fluidTick(float dt) {
     if (dt < 0.0f) dt = 0.0f;
     if (dt > 0.05f) dt = 0.05f;
@@ -499,7 +503,7 @@ void fluidTick(float dt) {
 
     gFftTime += dt;
     gFftClock += dt;
-    if (gFftClock >= 1.0f / 12.0f) {
+    if (gAllowHeavy && gFftClock >= 1.0f / 12.0f) {
         gFftClock = 0.0f;
         bool anyWater = false;
         for (int i = 0; i < RN * RN && !anyWater; ++i)

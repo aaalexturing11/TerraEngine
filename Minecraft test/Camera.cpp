@@ -399,6 +399,15 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
 glm::vec3 cameraBobOffset() { return bobOffset; }
 float cameraFov() { return viewFov; }
 
+bool cameraEyesInWater() {
+    int ix = (int)std::floor(camX);
+    int iy = (int)std::floor(camY);
+    int iz = (int)std::floor(camZ);
+    if (blockAt(ix, iy, iz) == Block::Water) return true;
+    if (waterHasSurface(ix, iz) && (float)camY < waterSurfaceY(ix, iz) - 0.04f) return true;
+    return false;
+}
+
 glm::vec3 cameraPosition() {
     return glm::vec3((float)camX, (float)camY, (float)camZ);
 }

@@ -131,6 +131,8 @@ uniform float uGodStrength;
 uniform float uExposure;
 uniform vec2 uSunUv;
 uniform sampler2D uDepth;
+uniform float uUnder;
+uniform float uTime;
 
 vec3 aces(vec3 x) {
     return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
@@ -139,20 +141,42 @@ vec3 aces(vec3 x) {
 void main() {
     vec3 col = texture(uScene, vUv).rgb;
     float ao = texture(uAo, vUv).r;
-    col *= mix(1.0, ao, 0.9);
-    vec3 godCol = mix(vec3(1.0, 0.93, 0.78), vec3(1.0, 0.48, 0.18), clamp(uDusk, 0.0, 1.0));
+    col *= mix(1.0, ao, 0.55);
+    vec3 godCol = mix(vec3(0.85, 0.93, 1.0), vec3(1.0, 0.55, 0.22), clamp(uDusk, 0.0, 1.0));
     float sunDist = length(vUv - uSunUv);
     float depth = texture(uDepth, vUv).r;
     float inSky = smoothstep(0.985, 0.998, depth);
-    float halo = exp(-sunDist * sunDist * 48.0) * uGodStrength * 0.22 * inSky;
+    float halo = exp(-sunDist * sunDist * 48.0) * uGodStrength * 0.18 * inSky;
     col += godCol * halo;
-    col += texture(uGod, vUv).rgb * godCol * uGodStrength * 0.35 * inSky;
-    col += texture(uBloom, vUv).rgb * 0.9;
+    col += texture(uGod, vUv).rgb * godCol * uGodStrength * 0.28 * inSky;
+    col += texture(uBloom, vUv).rgb * 0.55;
+    if (uUnder > 0.5) {
+        float bright = dot(col, vec3(0.30, 0.50, 0.20));
+        float window = smoothstep(0.12, 0.45, bright);
+        float far = smoothstep(0.12, 0.7, depth) * (1.0 - window);
+        col = mix(col, vec3(0.05, 0.28, 0.34), 0.18 + far * 0.35);
+        float c1 = sin(vUv.x * 62.0 + uTime * 1.4) * sin(vUv.y * 54.0 - uTime * 1.1);
+        float c2 = sin(vUv.x * 27.0 - uTime * 0.6 + vUv.y * 21.0);
+        float cau = smoothstep(0.2, 0.85, c1 * 0.5 + 0.5) * smoothstep(0.25, 0.9, c2 * 0.5 + 0.5);
+        col += vec3(0.25, 0.55, 0.50) * cau * 0.28 * uDay * (1.0 - window * 0.5);
+        vec2 dir = uSunUv - vUv;
+        vec2 p = vUv;
+        vec2 stepUv = dir / 12.0;
+        float acc = 0.0;
+        for (int i = 0; i < 8; ++i) {
+            p += stepUv;
+            if (p.x < 0.0 || p.y < 0.0 || p.x > 1.0 || p.y > 1.0) break;
+            float d = texture(uDepth, p).r;
+            acc += smoothstep(0.35, 0.92, d) * (1.0 - float(i) / 8.0);
+        }
+        float face = clamp(1.2 - length(dir) * 0.35, 0.35, 1.0);
+        col += vec3(0.75, 0.95, 0.88) * (acc / 4.0) * face * max(uGodStrength, 0.55) * uDay;
+    }
     col *= uExposure;
     col = aces(col);
-    vec3 grade = mix(vec3(0.84, 0.92, 1.08), vec3(1.08, 0.97, 0.88), clamp(uDay, 0.0, 1.0));
+    vec3 grade = mix(vec3(0.78, 0.86, 1.08), vec3(0.90, 0.96, 1.08), clamp(uDay, 0.0, 1.0));
     col *= grade;
-    col = mix(col, col * vec3(1.15, 0.78, 0.58), clamp(uDusk, 0.0, 1.0) * 0.4);
+    col = mix(col, col * vec3(1.12, 0.82, 0.62), clamp(uDusk, 0.0, 1.0) * 0.35);
     frag = vec4(col, 1.0);
 }
 )GLSL";
@@ -284,7 +308,7 @@ void bindWaterInputs() {
     glx.ActiveTexture(GL_TEXTURE0);
 }
 
-void presentScene(int width, int height, const DayNightLighting& light, const glm::vec2& sunUv, float godStrength) {
+void presentScene(int width, int height, const DayNightLighting& light, const glm::vec2& sunUv, float godStrength, bool underwater, float time) {
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
 
@@ -348,8 +372,10 @@ void presentScene(int width, int height, const DayNightLighting& light, const gl
     glx.Uniform1f(glx.GetUniformLocation(gProgComposite, "uDusk"), light.duskFactor);
     glx.Uniform1f(glx.GetUniformLocation(gProgComposite, "uGodStrength"), godStrength);
     glx.Uniform2f(glx.GetUniformLocation(gProgComposite, "uSunUv"), sunUv.x, sunUv.y);
-    float exposure = 1.05f + 0.25f * (1.0f - light.dayFactor);
+    float exposure = underwater ? 0.92f : (0.96f + 0.12f * (1.0f - light.dayFactor));
     glx.Uniform1f(glx.GetUniformLocation(gProgComposite, "uExposure"), exposure);
+    glx.Uniform1f(glx.GetUniformLocation(gProgComposite, "uUnder"), underwater ? 1.0f : 0.0f);
+    glx.Uniform1f(glx.GetUniformLocation(gProgComposite, "uTime"), time);
 
     glx.ActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, gSceneColor);

@@ -27,6 +27,7 @@ struct PauseMenuState {
 void gameMenuInit();
 void pauseMenuUpdateInput(GLFWwindow* window, PauseMenuState& state);
 void pauseMenuRender(int width, int height, const PauseMenuState& state);
+void titleBarRender(GLFWwindow* window, int width, int height, const PauseMenuState& state);
 void gameMenuTickLoading();
 bool gameMenuInWorld();
 void gameMenuLeaveWorld();

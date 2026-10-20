@@ -31,3 +31,4 @@ void renderWaterBlocks(int renderRadiusXZ, int renderMaxY);
 void clearWorldMeshes();
 int pumpWorldMeshes(int maxBuild);
 void beginFrameMeshes();
+void setMeshBudget(int budget);

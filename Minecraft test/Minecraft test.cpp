@@ -28,6 +28,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
+    glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
 
     GLFWwindow* window = glfwCreateWindow(800, 800, "TerraEngine", NULL, NULL);
     if (!window) {
@@ -138,10 +139,38 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         }
 
         const bool inWorld = gameMenuInWorld();
+        static bool eWasDown = false;
+        bool eDown = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
+        if (inWorld && eDown && !eWasDown && !paused) {
+            setInventoryOpen(!inventoryOpen());
+            cameraResetMouse();
+        }
+        eWasDown = eDown;
+        bool uiOpen = !inWorld || paused || inventoryOpen();
+        cameraSetLookEnabled(inWorld && !uiOpen);
+        glfwSetInputMode(window, GLFW_CURSOR, uiOpen ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+
+        int generated = 0;
+        if (inWorld) {
+            cameraUpdateMovement(window, !uiOpen, (float)(frameStart - lastFrameTime));
+            generated = worldStreamAround((float)camX, (float)camZ);
+            setMeshBudget(generated > 0 ? 0 : 1);
+            fluidSetHeavy(generated == 0);
+            fluidSetView((float)camX, (float)camZ);
+            if (!uiOpen) {
+                updateSelectedBlock(window);
+                tickWater((float)(frameStart - lastFrameTime));
+                fluidTick((float)(frameStart - lastFrameTime));
+            }
+        }
+        lastFrameTime = frameStart;
+
         glm::vec3 camPos = cameraPosition();
+        bool submerged = inWorld && cameraEyesInWater();
+        static int shadowTick = 0;
         if (inWorld) {
             beginFrameMeshes();
-            if (light.sunIntensity > 0.08f) {
+            if (light.sunIntensity > 0.08f && generated == 0 && ((shadowTick++ & 1) == 0)) {
                 beginShadowPass(light, camPos);
                 renderShadowCasters(shadowRadiusXZ, renderMaxY);
                 endShadowPass(width, height);
@@ -153,23 +182,13 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             glx.BindFramebuffer(GL_FRAMEBUFFER, 0);
             glViewport(0, 0, width, height);
         }
-        glClearColor(light.skyColor.r, light.skyColor.g, light.skyColor.b, 1.0f);
+        glm::vec3 clearCol = submerged ? glm::vec3(0.03f, 0.14f, 0.22f) : light.skyColor;
+        glClearColor(clearCol.r, clearCol.g, clearCol.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
-
-        static bool eWasDown = false;
-        bool eDown = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
-        if (inWorld && eDown && !eWasDown && !paused) {
-            setInventoryOpen(!inventoryOpen());
-            cameraResetMouse();
-        }
-        eWasDown = eDown;
-        bool uiOpen = !inWorld || paused || inventoryOpen();
-        cameraSetLookEnabled(inWorld && !uiOpen);
-        glfwSetInputMode(window, GLFW_CURSOR, uiOpen ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
 
         if (inWorld) {
             glLoadIdentity();
@@ -192,17 +211,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
                 drawBillboardTextured(camPos + light.moonDir * 110.0f, viewDir, 6.5f, moonTex[phase], phase == 4 ? 0.35f : 1.15f);
             glDisable(GL_BLEND);
             glDepthMask(GL_TRUE);
-
-            cameraUpdateMovement(window, !uiOpen, (float)(frameStart - lastFrameTime));
-            worldStreamAround((float)camX, (float)camZ);
-            fluidSetView((float)camX, (float)camZ);
-            if (!uiOpen) {
-                updateSelectedBlock(window);
-                tickWater((float)(frameStart - lastFrameTime));
-                fluidTick((float)(frameStart - lastFrameTime));
-            }
         }
-        lastFrameTime = frameStart;
 
         if (inWorld) {
         bindOpaqueShader(light, time);
@@ -245,7 +254,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         float facing = glm::clamp((vz + 0.2f) / 0.75f, 0.0f, 1.0f);
         facing = facing * facing * (3.0f - 2.0f * facing);
         float god = facing * light.sunIntensity * 0.34f;
-        presentScene(width, height, light, sunUv, god);
+        if (submerged) god = light.sunIntensity * 0.9f;
+        presentScene(width, height, light, sunUv, god, submerged, time);
 
         drawCrosshair(width, height);
 
@@ -345,6 +355,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         }
 
         pauseMenuRender(width, height, menuState);
+        titleBarRender(window, width, height, menuState);
 
         ImGui::Render();
         glViewport(0, 0, width, height);

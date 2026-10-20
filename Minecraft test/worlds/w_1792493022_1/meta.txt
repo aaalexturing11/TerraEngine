@@ -1,0 +1,5 @@
+name=Nuevo mundo
+seed=1403536800
+sx=-80
+sy=51
+sz=-92
