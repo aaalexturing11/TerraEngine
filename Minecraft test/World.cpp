@@ -262,11 +262,54 @@ static void rememberWater(int x, int y, int z) {
     waterCells.push_back({ x, y, z });
 }
 
-static bool placeFlow(int x, int y, int z, int lv) {
+static int gFallPhase = 0;
+
+static bool canEnterWater(int x, int y, int z) {
     if (!inBounds(x, y, z) || waterSource[x][y][z]) return false;
-    if (blocks[x][y][z] != Block::Air) return false;
+    Block b = blocks[x][y][z];
+    return b == Block::Air || b == Block::Torch || isPlant(b);
+}
+
+static void eraseWater(int x, int y, int z) {
+    blocks[x][y][z] = Block::Air;
+    waterSource[x][y][z] = false;
+    waterLevel[x][y][z] = 255;
+    gMeta[x][y][z] = 0;
+}
+
+static bool erasePlant(int x, int y, int z) {
+    if (!inBounds(x, y, z) || !isPlant(blocks[x][y][z])) return false;
+    blocks[x][y][z] = Block::Air;
+    gMeta[x][y][z] = 0;
+    return true;
+}
+
+static bool erasePlantsNear(int x, int y, int z) {
+    bool any = false;
+    const int dir[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+    for (int i = 0; i < 4; ++i) {
+        if (erasePlant(x + dir[i][0], y, z + dir[i][1])) any = true;
+        if (erasePlant(x + dir[i][0], y + 1, z + dir[i][1])) any = true;
+    }
+    if (erasePlant(x, y + 1, z)) any = true;
+    return any;
+}
+
+static void putSource(int x, int y, int z) {
     blocks[x][y][z] = Block::Water;
+    waterSource[x][y][z] = true;
+    waterLevel[x][y][z] = 0;
+    gMeta[x][y][z] = 0;
+    rememberWater(x, y, z);
+    resolveFluidContact(x, y, z);
+}
+
+static bool placeFlow(int x, int y, int z, int lv) {
+    if (!canEnterWater(x, y, z)) return false;
+    blocks[x][y][z] = Block::Water;
+    waterSource[x][y][z] = false;
     waterLevel[x][y][z] = (unsigned char)lv;
+    gMeta[x][y][z] = 0;
     rememberWater(x, y, z);
     resolveFluidContact(x, y, z);
     return true;
@@ -307,20 +350,67 @@ static void stepWater(bool& changed, int& minX, int& minY, int& minZ, int& maxX,
         touch(c.x, c.y, c.z);
     }
 
+    ++gFallPhase;
     for (const WaterCell& c : snapshot) {
         if (!inBounds(c.x, c.y, c.z) || blocks[c.x][c.y][c.z] != Block::Water) continue;
+        if (erasePlantsNear(c.x, c.y, c.z))
+            touch(c.x, c.y, c.z);
         if (!waterSource[c.x][c.y][c.z] && !waterSupported(c.x, c.y, c.z)) continue;
-        int lv = (int)waterLevel[c.x][c.y][c.z];
+        bool source = waterSource[c.x][c.y][c.z];
+        int lv = source ? 0 : (int)waterLevel[c.x][c.y][c.z];
+        bool openBelow = c.y > 0 && canEnterWater(c.x, c.y - 1, c.z);
+        if (openBelow) {
+            int period = 1;
+            int speed = 1;
+            bool keepLip = true;
+            if (lv <= 1) { speed = 2; period = 1; keepLip = true; }
+            else if (lv <= 3) { speed = 1; period = 1; keepLip = true; }
+            else if (lv <= 5) { speed = 1; period = 2; keepLip = false; }
+            else { speed = 1; period = 3; keepLip = false; }
+            if ((gFallPhase % period) != 0) continue;
+            if (source) {
+                int dest = c.y;
+                for (int s = 0; s < speed; ++s) {
+                    if (dest <= 0 || !canEnterWater(c.x, dest - 1, c.z)) break;
+                    --dest;
+                }
+                if (dest != c.y) {
+                    eraseWater(c.x, c.y, c.z);
+                    putSource(c.x, dest, c.z);
+                    erasePlantsNear(c.x, dest, c.z);
+                    touch(c.x, c.y, c.z);
+                    touch(c.x, dest, c.z);
+                }
+            }
+            else {
+                int y = c.y;
+                int dropped = 0;
+                int fallLevel = lv < 1 ? 0 : lv;
+                for (int s = 0; s < speed; ++s) {
+                    if (y <= 0 || !canEnterWater(c.x, y - 1, c.z)) break;
+                    if (!placeFlow(c.x, y - 1, c.z, fallLevel)) break;
+                    erasePlantsNear(c.x, y - 1, c.z);
+                    --y;
+                    ++dropped;
+                    touch(c.x, y, c.z);
+                }
+                if (dropped > 0 && !keepLip) {
+                    eraseWater(c.x, c.y, c.z);
+                    touch(c.x, c.y, c.z);
+                }
+            }
+            continue;
+        }
         bool blockedBelow = (c.y == 0) || solid(c.x, c.y - 1, c.z);
-        if (!blockedBelow && placeFlow(c.x, c.y - 1, c.z, 0))
-            touch(c.x, c.y - 1, c.z);
-        if ((blockedBelow || waterSource[c.x][c.y][c.z]) && lv < 7) {
+        if ((blockedBelow || source) && lv < 7) {
             const int dir[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
             for (int i = 0; i < 4; ++i) {
                 int nx = c.x + dir[i][0];
                 int nz = c.z + dir[i][1];
-                if (placeFlow(nx, c.y, nz, lv + 1))
+                if (placeFlow(nx, c.y, nz, lv + 1)) {
+                    erasePlantsNear(nx, c.y, nz);
                     touch(nx, c.y, nz);
+                }
             }
         }
     }
@@ -359,20 +449,38 @@ int blockMeta(int x, int y, int z) {
     return gMeta[x][y][z];
 }
 
+static void releaseDecorations(int x, int y, int z) {
+    Block above = blockAt(x, y + 1, z);
+    if (isPlant(above) || above == Block::Torch)
+        setBlock(x, y + 1, z, Block::Air);
+    auto wall = [](int nx, int ny, int nz, int meta) {
+        if (blockAt(nx, ny, nz) == Block::Torch && blockMeta(nx, ny, nz) == meta)
+            setBlock(nx, ny, nz, Block::Air);
+    };
+    wall(x + 1, y, z, 1);
+    wall(x - 1, y, z, 2);
+    wall(x, y, z + 1, 3);
+    wall(x, y, z - 1, 4);
+}
+
 void setBlock(int x, int y, int z, Block value, int meta) {
     if (!inBounds(x, y, z)) return;
+    Block old = blocks[x][y][z];
     if (value != Block::Water)
         waterSource[x][y][z] = false;
     blocks[x][y][z] = value;
-    gMeta[x][y][z] = (value == Block::Torch) ? (unsigned char)meta : 0;
+    gMeta[x][y][z] = (value == Block::Torch || value == Block::Log) ? (unsigned char)meta : 0;
     if (value == Block::Water) {
         waterSource[x][y][z] = true;
         waterLevel[x][y][z] = 0;
         rememberWater(x, y, z);
+        erasePlantsNear(x, y, z);
     }
     else {
         waterLevel[x][y][z] = 255;
     }
+    if (blockInfo(old).solid && !blockInfo(value).solid)
+        releaseDecorations(x, y, z);
     relightRegion(x, y, z);
     markMeshArea(x - 16, z - 16, x + 16, z + 16);
     if (!gReacting)

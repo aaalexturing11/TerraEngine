@@ -80,7 +80,12 @@ void updateSelectedBlock(GLFWwindow* window) {
     }
 }
 
-static const Block kSlots[10] = {
+static bool gInventory = false;
+
+bool inventoryOpen() { return gInventory; }
+void setInventoryOpen(bool open) { gInventory = open; }
+
+static Block kSlots[10] = {
     Block::Grass, Block::Water, Block::Torch, Block::Lava, Block::Dirt,
     Block::Log, Block::Leaves, Block::TallGrass, Block::Poppy, Block::Triteleia
 };
@@ -102,6 +107,9 @@ const char* placeSlotName(int slot) {
     case Block::TallGrass: return "Pasto";
     case Block::Poppy: return "Amapola";
     case Block::Triteleia: return "Flor";
+    case Block::TriteleiaRed: return "Flor rosa";
+    case Block::Stone: return "Piedra";
+    case Block::Obsidian: return "Obsidiana";
     default: return "Pasto";
     }
 }
@@ -109,6 +117,12 @@ const char* placeSlotName(int slot) {
 void selectPlaceSlot(int slot) {
     if (slot < 0) slot = 0;
     if (slot > 9) slot = 9;
+    gSlot = slot;
+}
+
+void setHotbarBlock(int slot, Block block) {
+    if (slot < 0 || slot > 9) return;
+    kSlots[slot] = block;
     gSlot = slot;
 }
 
@@ -128,7 +142,7 @@ const char* selectedPlaceName() {
 }
 
 void handleMouseClick(GLFWwindow*, int button, int action, int) {
-    if (action != GLFW_PRESS || !hasSelected) return;
+    if (gInventory || action != GLFW_PRESS || !hasSelected) return;
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
         setBlock(selectedBlock.x, selectedBlock.y, selectedBlock.z, Block::Air);
     }
@@ -170,6 +184,11 @@ void handleMouseClick(GLFWwindow*, int button, int action, int) {
         Block there = blockAt(p.x, p.y, p.z);
         if (there != Block::Air && there != Block::Water)
             return;
-        setBlock(p.x, p.y, p.z, gPlace);
+        int meta = 0;
+        if (gPlace == Block::Log) {
+            if (hitNormal.x != 0) meta = 1;
+            else if (hitNormal.z != 0) meta = 2;
+        }
+        setBlock(p.x, p.y, p.z, gPlace, meta);
     }
 }

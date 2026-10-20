@@ -21,6 +21,7 @@ out vec3 vAlbedo;
 out vec4 vPack;
 out vec2 vUv;
 out float vTex;
+out float vLeaf;
 out float vLamp;
 uniform float uTime;
 void main() {
@@ -43,6 +44,7 @@ void main() {
     vPack = gl_MultiTexCoord0;
     vUv = gl_MultiTexCoord1.xy;
     vTex = gl_MultiTexCoord1.z;
+    vLeaf = gl_MultiTexCoord1.w;
     gl_Position = gl_ModelViewProjectionMatrix * vec4(p, 1.0);
 }
 )GLSL";
@@ -55,6 +57,7 @@ in vec3 vAlbedo;
 in vec4 vPack;
 in vec2 vUv;
 in float vTex;
+in float vLeaf;
 in float vLamp;
 out vec4 fragColor;
 uniform vec3 uSunDir;
@@ -98,9 +101,13 @@ void main() {
     float vis = shadowVis(vWorld + n * 0.05, ndl);
     float skyVis = smoothstep(0.2, 0.78, sky);
     vec3 albedo = vAlbedo;
+    float alpha = 1.0;
     if (vTex > 0.5) {
         vec4 texel = texture(uAlbedo, vUv);
-        if (texel.a < 0.4) discard;
+        if (vLeaf > 0.5) {
+            if (texel.a < 0.15) discard;
+            alpha = texel.a;
+        } else if (texel.a < 0.4) discard;
         albedo *= texel.rgb;
     }
     vec3 indirect = albedo * (vec3(0.028) + uAmbient * skyVis + uSky * sky * 0.42) * ao;
@@ -110,7 +117,7 @@ void main() {
     float wave = 0.6 + 0.4 * sin(uTime * 2.5 + vWorld.x * 7.5 + vWorld.z * 6.5);
     vec3 caustics = vec3(0.55, 0.95, 0.90) * cau * wave * uSunAmt * skyVis * 0.85;
     vec3 glow = albedo * emit * 2.6;
-    fragColor = vec4(indirect + lampCol + sun + moon + caustics + glow, 1.0);
+    fragColor = vec4(indirect + lampCol + sun + moon + caustics + glow, alpha);
 }
 )GLSL";
 
@@ -118,11 +125,13 @@ static const char* kWaterVs = R"GLSL(
 #version 330 compatibility
 out vec3 vWorld;
 out vec3 vNormal;
-out vec3 vFlow;
+out vec4 vFlow;
+out float vAcross;
 uniform float uTime;
 void main() {
     vec3 p = gl_Vertex.xyz;
-    vFlow = gl_MultiTexCoord0.xyz;
+    vFlow = gl_MultiTexCoord0;
+    vAcross = gl_MultiTexCoord1.x;
     vNormal = gl_Normal;
     float wave = sin(p.x * 1.55 + uTime * 1.2) * 0.012;
     wave += cos(p.z * 1.28 - uTime * 0.85) * 0.01;
@@ -137,7 +146,8 @@ static const char* kWaterFs = R"GLSL(
 #version 330 compatibility
 in vec3 vWorld;
 in vec3 vNormal;
-in vec3 vFlow;
+in vec4 vFlow;
+in float vAcross;
 out vec4 fragColor;
 uniform vec3 uCam;
 uniform vec3 uSky;
@@ -157,11 +167,20 @@ void main() {
     vec3 geo = normalize(vNormal);
     bool surface = geo.y > 0.45;
     if (!surface) {
-        float fall = fract(-vWorld.y * 1.7 + uTime * 1.35);
-        float streak = smoothstep(0.1, 0.0, abs(fall - 0.28));
-        streak = max(streak, smoothstep(0.1, 0.0, abs(fall - 0.66)) * 0.75);
-        vec3 col = mix(vec3(0.04, 0.28, 0.42), vec3(0.78, 0.94, 0.96), streak);
-        fragColor = vec4(col, 0.42);
+        float stream = clamp(vFlow.w, 0.0, 1.0);
+        float speed = mix(0.85, 3.6, stream);
+        float along = fract(-vWorld.y * 2.8 - uTime * speed);
+        float drop = smoothstep(0.0, 0.05, along) * smoothstep(0.40, 0.12, along);
+        float core = smoothstep(0.18, 0.72, stream);
+        float band = max(core, drop);
+        float across = abs(vAcross * 2.0 - 1.0);
+        float bulge = mix(0.28, 1.0, max(core * 0.85, drop));
+        if (band < 0.05 || across > bulge) discard;
+        float shine = pow(drop, 1.4);
+        vec3 col = mix(vec3(0.03, 0.25, 0.40), vec3(0.72, 0.92, 0.98), shine);
+        col = mix(col, vec3(0.10, 0.45, 0.62), core * (1.0 - shine));
+        float alpha = mix(0.28, 0.78, max(core, drop));
+        fragColor = vec4(col, alpha);
         return;
     }
 

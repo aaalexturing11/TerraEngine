@@ -10,12 +10,27 @@ double yaw = -90.0, pitch = 0.0;
 
 static bool firstMouse = true;
 static double lastX = 400.0, lastY = 400.0;
+static bool lookEnabled = true;
+static float stepPhase = 0.0f;
+static float bobBlend = 0.0f;
+static float landDip = 0.0f;
+static float airTime = 0.0f;
+static float viewFov = 60.0f;
+static glm::vec2 bobDir(0.0f, -1.0f);
+static glm::vec3 bobSmoothed(0.0f);
+static glm::vec3 bobOffset(0.0f);
 
 void cameraResetMouse() {
     firstMouse = true;
 }
 
+void cameraSetLookEnabled(bool enabled) {
+    lookEnabled = enabled;
+    if (!enabled) firstMouse = true;
+}
+
 void cameraOnMouseMove(GLFWwindow*, double xpos, double ypos) {
+    if (!lookEnabled) return;
     if (firstMouse) {
         lastX = xpos;
         lastY = ypos;
@@ -44,6 +59,16 @@ static const float kEye = 1.62f;
 static const float kHeight = 1.8f;
 static const float kRadius = 0.3f;
 
+static bool overlapsWater(float x, float feet, float z) {
+    const float heights[3] = { 0.2f, 0.9f, 1.5f };
+    int ix = (int)std::floor(x);
+    int iz = (int)std::floor(z);
+    for (float h : heights) {
+        if (blockAt(ix, (int)std::floor(feet + h), iz) == Block::Water) return true;
+    }
+    return false;
+}
+
 static bool hitsSolid(float x, float feet, float z) {
     int x0 = (int)std::floor(x - kRadius);
     int x1 = (int)std::floor(x + kRadius - 0.0001f);
@@ -55,7 +80,7 @@ static bool hitsSolid(float x, float feet, float z) {
         for (int iy = y0; iy <= y1; ++iy)
             for (int iz = z0; iz <= z1; ++iz) {
                 Block b = blockAt(ix, iy, iz);
-                if (b != Block::Air && b != Block::Torch && !isPlant(b)) return true;
+                if (b != Block::Air && b != Block::Torch && b != Block::Water && !isPlant(b)) return true;
             }
     return false;
 }
@@ -122,13 +147,28 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
     bool shift = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
     bool space = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
 
+    float feetNow = (float)camY - kEye;
+    bool wet = !flying && overlapsWater((float)camX, feetNow, (float)camZ);
+    bool headWet = false;
+    if (wet) {
+        int hx = (int)std::floor((float)camX);
+        int hy = (int)std::floor(feetNow + 1.55f);
+        int hz = (int)std::floor((float)camZ);
+        headWet = blockAt(hx, hy, hz) == Block::Water;
+    }
+
     if (space && !spaceWasDown) {
         double now = glfwGetTime();
         if (now - lastSpaceTap < 0.28) {
             flying = !flying;
             bodyVy = 0.0f;
+            wet = false;
         }
-        else if (!flying && grounded) {
+        else if (!flying && wet && !headWet) {
+            bodyVy = 6.4f;
+            grounded = false;
+        }
+        else if (!flying && grounded && !wet) {
             bodyVy = 8.4f;
             grounded = false;
         }
@@ -136,8 +176,8 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
     }
     spaceWasDown = space;
 
-    float speed = 4.3f;
-    if (ctrl && w) speed = 7.0f;
+    float speed = wet ? 2.15f : 4.3f;
+    if (ctrl && w) speed = wet ? 3.3f : 7.0f;
     if (flying) speed = (ctrl && w) ? 12.0f : 8.0f;
 
     glm::vec3 wish(0.0f);
@@ -165,14 +205,29 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
         grounded = false;
     }
     else {
-        bodyVy -= 28.0f * dt;
-        if (bodyVy < -52.0f) bodyVy = -52.0f;
+        if (wet) {
+            bodyVy -= 5.0f * dt;
+            if (space) bodyVy += 14.0f * dt;
+            float riseCap = headWet ? 3.1f : 6.6f;
+            if (bodyVy > riseCap) bodyVy = riseCap;
+            if (bodyVy < -2.0f) bodyVy = -2.0f;
+        }
+        else {
+            bodyVy -= 28.0f * dt;
+            if (bodyVy < -52.0f) bodyVy = -52.0f;
+        }
         float dy = bodyVy * dt;
         int steps = (int)(std::fabs(dy) / 0.2f) + 1;
         float step = dy / (float)steps;
         bool hit = false;
         for (int i = 0; i < steps; ++i) {
             float next = feet + step;
+            if (!flying && !wet && overlapsWater((float)camX, next, (float)camZ)) {
+                if (bodyVy < -2.0f) bodyVy = -2.0f;
+                feet = next;
+                grounded = false;
+                break;
+            }
             if (hitsSolid((float)camX, next, (float)camZ)) {
                 hit = true;
                 break;
@@ -180,8 +235,13 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
             feet = next;
         }
         if (hit && bodyVy < 0.0f) {
+            if (!wet && airTime > 0.12f && bodyVy < -7.0f) {
+                landDip = (-bodyVy - 7.0f) / 14.0f;
+                if (landDip > 1.0f) landDip = 1.0f;
+            }
             bodyVy = 0.0f;
             grounded = true;
+            airTime = 0.0f;
         }
         else if (hit && bodyVy > 0.0f) {
             bodyVy = 0.0f;
@@ -192,7 +252,62 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
         }
     }
     camY = feet + kEye;
+    if (!grounded && !flying) airTime += dt;
+    else airTime = 0.0f;
+
+    float moved = std::sqrt(wish.x * wish.x + wish.z * wish.z) * dt;
+    bool stepping = grounded && !flying && moved > 0.002f;
+    const float tau = 6.2831853f;
+    if (stepping) {
+        stepPhase += dt * ((speed > 6.0f) ? 12.0f : 8.2f);
+        if (stepPhase > tau) stepPhase -= tau;
+        glm::vec2 dir(wish.x, wish.z);
+        float dl = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+        if (dl > 0.001f) {
+            dir /= dl;
+            float follow = 1.0f - std::exp(-dt * 6.0f);
+            bobDir += (dir - bobDir) * follow;
+            float bl = std::sqrt(bobDir.x * bobDir.x + bobDir.y * bobDir.y);
+            if (bl > 0.001f) bobDir /= bl;
+        }
+    }
+    else {
+        float p = stepPhase;
+        if (p > tau * 0.5f) p -= tau;
+        p *= std::exp(-dt * 10.0f);
+        if (p < 0.0f) p += tau;
+        stepPhase = p;
+    }
+    float targetBob = stepping ? (wet ? 0.22f : 1.0f) : 0.0f;
+    float blendRate = stepping ? 6.0f : 14.0f;
+    bobBlend += (targetBob - bobBlend) * (1.0f - std::exp(-dt * blendRate));
+    if (bobBlend < 0.01f) bobBlend = 0.0f;
+    landDip *= std::exp(-dt * 8.0f);
+    float hopWave = std::sin(stepPhase);
+    float hop = hopWave * hopWave * 0.04f * bobBlend;
+    float sway = hopWave * 0.016f * bobBlend;
+    if (!grounded && !flying && !wet) {
+        float drop = -bodyVy;
+        if (drop > 10.0f) drop = 10.0f;
+        if (drop < 0.0f) drop = 0.0f;
+        hop += drop * 0.003f;
+    }
+    glm::vec3 side(-bobDir.y, 0.0f, bobDir.x);
+    glm::vec3 targetBobPos = side * sway + glm::vec3(0.0f, hop - landDip * 0.05f, 0.0f);
+    if (!stepping && grounded && landDip < 0.02f) targetBobPos = glm::vec3(0.0f);
+    bobSmoothed += (targetBobPos - bobSmoothed) * (1.0f - std::exp(-dt * 12.0f));
+    if (glm::length(bobSmoothed) < 0.0012f) bobSmoothed = glm::vec3(0.0f);
+    bobOffset = bobSmoothed;
+
+    float targetFov = 60.0f;
+    if (flying) targetFov = 66.0f;
+    else if (!wet && speed > 6.0f && grounded) targetFov = 68.0f;
+    if (!grounded && !flying && !wet && airTime > 0.12f) targetFov += 2.5f;
+    viewFov += (targetFov - viewFov) * (1.0f - std::exp(-dt * 6.0f));
 }
+
+glm::vec3 cameraBobOffset() { return bobOffset; }
+float cameraFov() { return viewFov; }
 
 glm::vec3 cameraPosition() {
     return glm::vec3((float)camX, (float)camY, (float)camZ);

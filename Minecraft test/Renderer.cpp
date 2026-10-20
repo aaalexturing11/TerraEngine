@@ -61,7 +61,7 @@ void setup3D(int w, int h) {
     glViewport(0, 0, w, h);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    gluPerspective(60.0, (double)w / h, 0.1, 250.0);
+    gluPerspective(cameraFov(), (double)w / h, 0.1, 250.0);
     glMatrixMode(GL_MODELVIEW);
     glEnable(GL_DEPTH_TEST);
 }
@@ -69,8 +69,11 @@ void setup3D(int w, int h) {
 static void emitBox(int bx, int by, int bz, float hs, bool shaded) {
     Block self = blockAt(bx, by, bz);
     auto hidden = [&](int nx, int ny, int nz) {
-        if (self == Block::Water) return blockAt(bx + nx, by + ny, bz + nz) == Block::Water;
+        Block nb = blockAt(bx + nx, by + ny, bz + nz);
+        if (self == Block::Water) return nb == Block::Water;
         if (self == Block::Torch) return false;
+        if (self == Block::Leaves) return nb == Block::Leaves;
+        if (nb == Block::Leaves) return false;
         return solid(bx + nx, by + ny, bz + nz);
     };
 
@@ -98,6 +101,24 @@ static void emitBox(int bx, int by, int bz, float hs, bool shaded) {
     auto face = [&](const glm::vec3& normal, glm::vec3 v1, glm::vec3 v2, glm::vec3 v3, glm::vec3 v4,
         unsigned tex, glm::vec2 t1, glm::vec2 t2, glm::vec2 t3, glm::vec2 t4) {
         if (hidden((int)normal.x, (int)normal.y, (int)normal.z)) return;
+        if (self == Block::Log) {
+            int axis = blockMeta(bx, by, bz);
+            bool cap = (axis == 1) ? std::abs(normal.x) > 0.5f : (axis == 2) ? std::abs(normal.z) > 0.5f : std::abs(normal.y) > 0.5f;
+            tex = cap ? gBlockTex.logTop : gBlockTex.logSide;
+            if (!cap) {
+                auto bark = [&](const glm::vec3& p) {
+                    float lx = p.x - (x - hs);
+                    float ly = p.y - (y - hs);
+                    float lz = p.z - (z - hs);
+                    float u, v;
+                    if (axis == 1) { v = lx; u = std::abs(normal.y) > 0.5f ? lz : ly; }
+                    else if (axis == 2) { v = lz; u = std::abs(normal.y) > 0.5f ? lx : ly; }
+                    else { v = ly; u = std::abs(normal.x) > 0.5f ? lz : lx; }
+                    return glm::vec2(u, v);
+                };
+                t1 = bark(v1); t2 = bark(v2); t3 = bark(v3); t4 = bark(v4);
+            }
+        }
         if (shaded) {
             FaceLight lit = evaluateFace(bx, by, bz, normal);
             float useTex = tex ? 1.0f : 0.0f;
@@ -110,14 +131,15 @@ static void emitBox(int bx, int by, int bz, float hs, bool shaded) {
                 wind = 1.0f - cover * 0.12f;
                 if (wind < 0.28f) wind = 0.28f;
             }
+            float leaf = (self == Block::Leaves) ? 1.0f : 0.0f;
             auto put = [&](const glm::vec3& v, const glm::vec2& uv) {
                 if (gCap) {
                     pushMesh(tex, v, normal, lit.albedo.r, lit.albedo.g, lit.albedo.b, lit.blockLight,
-                        lit.gi, lit.emission, lit.caustic, lit.ao, uv.x, uv.y, useTex, 0.0f, x, y, z, wind);
+                        lit.gi, lit.emission, lit.caustic, lit.ao, uv.x, uv.y, useTex, leaf, x, y, z, wind);
                     return;
                 }
                 glx.MultiTexCoord4f(GL_TEXTURE0, lit.gi, lit.emission, lit.caustic, lit.ao);
-                glx.MultiTexCoord3f(GL_TEXTURE1, uv.x, uv.y, useTex);
+                glx.MultiTexCoord4f(GL_TEXTURE1, uv.x, uv.y, useTex, leaf);
                 glx.MultiTexCoord4f(GL_TEXTURE2, x, y, z, wind);
                 glVertex3f(v.x, v.y, v.z);
             };
@@ -277,61 +299,72 @@ static WaterCorner sampleCorner(int cx, int cz, int y) {
     return c;
 }
 
+static void pushWater(const glm::vec3& p, const glm::vec3& n, float fx, float fz, float down, float strength, float across) {
+    if (gCapWater) {
+        pushMesh(0, p, n, 1, 1, 1, 1, fx, fz, down, strength, across, 0, 0, 0, 0, 0, 0, 0);
+        return;
+    }
+    glNormal3f(n.x, n.y, n.z);
+    glTexCoord4f(fx, fz, down, strength);
+    glx.MultiTexCoord4f(GL_TEXTURE1, across, 0, 0, 0);
+    glVertex3f(p.x, p.y, p.z);
+}
+
 static void drawWater(int bx, int by, int bz) {
     float fx, fz, down;
     waterFlow(bx, by, bz, fx, fz, down);
-    bool falling = down > 0.5f || waterLevelAt(bx, by + 1, bz) >= 0;
-
-    WaterCorner c00 = sampleCorner(bx, bz, by);
-    WaterCorner c10 = sampleCorner(bx + 1, bz, by);
-    WaterCorner c11 = sampleCorner(bx + 1, bz + 1, by);
-    WaterCorner c01 = sampleCorner(bx, bz + 1, by);
-
-    auto vert = [&](const WaterCorner& c, float x, float z) {
-        if (gCapWater) {
-            pushMesh(0, glm::vec3(x, c.h, z), glm::vec3(0, 1, 0), 1, 1, 1, 1, c.fx, c.fz, c.down, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-            return;
+    bool feedAbove = waterLevelAt(bx, by + 1, bz) >= 0;
+    bool fallsHere = false;
+    for (int y = by; y > 0 && waterLevelAt(bx, y, bz) >= 0 && (by - y) < 16; --y) {
+        Block under = blockAt(bx, y - 1, bz);
+        if (under == Block::Air || under == Block::Torch || isPlant(under)) {
+            fallsHere = true;
+            break;
         }
-        glTexCoord4f(c.fx, c.fz, c.down, 0.0f);
-        glVertex3f(x, c.h, z);
-    };
-
-    if (!gCapWater) {
-        glBegin(GL_QUADS);
-        glNormal3f(0, 1, 0);
+        if (under != Block::Water) break;
     }
-    vert(c00, (float)bx, (float)bz);
-    vert(c01, (float)bx, (float)bz + 1);
-    vert(c11, (float)bx + 1, (float)bz + 1);
-    vert(c10, (float)bx + 1, (float)bz);
+    bool middle = feedAbove && fallsHere;
 
-    if (falling) {
-        float yb = (float)by;
-        float yt = (float)by + 1.0f;
-        auto side = [&](int ox, int oz, float x0, float z0, float x1, float z1) {
-            if (waterLevelAt(bx + ox, by, bz + oz) >= 0) return;
-            if (solid(bx + ox, by, bz + oz)) return;
-            glm::vec3 sn((float)ox, 0, (float)oz);
-            if (gCapWater) {
-                pushMesh(0, glm::vec3(x0, yb, z0), sn, 1, 1, 1, 1, fx, fz, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-                pushMesh(0, glm::vec3(x1, yb, z1), sn, 1, 1, 1, 1, fx, fz, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-                pushMesh(0, glm::vec3(x1, yt, z1), sn, 1, 1, 1, 1, fx, fz, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-                pushMesh(0, glm::vec3(x0, yt, z0), sn, 1, 1, 1, 1, fx, fz, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-            }
-            else {
-                glNormal3f(sn.x, sn.y, sn.z);
-                glTexCoord4f(fx, fz, 1.0f, 0.0f);
-                glVertex3f(x0, yb, z0);
-                glVertex3f(x1, yb, z1);
-                glVertex3f(x1, yt, z1);
-                glVertex3f(x0, yt, z0);
-            }
+    if (!middle) {
+        WaterCorner c00 = sampleCorner(bx, bz, by);
+        WaterCorner c10 = sampleCorner(bx + 1, bz, by);
+        WaterCorner c11 = sampleCorner(bx + 1, bz + 1, by);
+        WaterCorner c01 = sampleCorner(bx, bz + 1, by);
+        if (!gCapWater) {
+            glBegin(GL_QUADS);
+            glNormal3f(0, 1, 0);
+        }
+        auto vert = [&](const WaterCorner& c, float x, float z) {
+            pushWater(glm::vec3(x, c.h, z), glm::vec3(0, 1, 0), c.fx, c.fz, c.down, 0, 0);
         };
-        side(0, -1, (float)bx, (float)bz, (float)bx + 1, (float)bz);
-        side(0, 1, (float)bx + 1, (float)bz + 1, (float)bx, (float)bz + 1);
-        side(-1, 0, (float)bx, (float)bz + 1, (float)bx, (float)bz);
-        side(1, 0, (float)bx + 1, (float)bz, (float)bx + 1, (float)bz + 1);
+        vert(c00, (float)bx, (float)bz);
+        vert(c01, (float)bx, (float)bz + 1);
+        vert(c11, (float)bx + 1, (float)bz + 1);
+        vert(c10, (float)bx + 1, (float)bz);
+        if (!gCapWater) glEnd();
     }
+
+    if (!fallsHere) return;
+
+    int lv = waterLevelAt(bx, by, bz);
+    if (lv < 0) lv = 0;
+    float strength = 1.0f - (float)lv / 7.0f;
+    if (strength < 0.14f) strength = 0.14f;
+    float half = 0.06f + 0.22f * strength;
+    float cx = bx + 0.5f + fx * 0.18f;
+    float cz = bz + 0.5f + fz * 0.18f;
+    float yb = (float)by;
+    float yt = (float)by + 1.0f;
+    if (!gCapWater) glBegin(GL_QUADS);
+    auto ribbon = [&](float x0, float z0, float x1, float z1) {
+        glm::vec3 n = glm::normalize(glm::cross(glm::vec3(x1 - x0, 0, z1 - z0), glm::vec3(0, 1, 0)));
+        pushWater(glm::vec3(x0, yb, z0), n, fx, fz, 1, strength, 0);
+        pushWater(glm::vec3(x1, yb, z1), n, fx, fz, 1, strength, 1);
+        pushWater(glm::vec3(x1, yt, z1), n, fx, fz, 1, strength, 1);
+        pushWater(glm::vec3(x0, yt, z0), n, fx, fz, 1, strength, 0);
+    };
+    ribbon(cx - half, cz - half, cx + half, cz + half);
+    ribbon(cx - half, cz + half, cx + half, cz - half);
     if (!gCapWater) glEnd();
 }
 
@@ -424,6 +457,16 @@ static void drawTorch(int bx, int by, int bz) {
     side(-right);
     side(fwd);
     side(-fwd);
+    glm::vec2 b00(u0, v0), b10(u1, v0), b11(u1, v0 + 1.0f / 16.0f), b01(u0, v0 + 1.0f / 16.0f);
+    glm::vec2 f00(u0, v1 - 1.0f / 16.0f), f10(u1, v1 - 1.0f / 16.0f), f11(u1, v1), f01(u0, v1);
+    drawCutoutQuad(bx, by, bz, tex, -axis,
+        base - right * half - fwd * half, base + right * half - fwd * half,
+        base + right * half + fwd * half, base - right * half + fwd * half,
+        b00, b10, b11, b01);
+    drawCutoutQuad(bx, by, bz, tex, axis,
+        tip - right * half + fwd * half, tip + right * half + fwd * half,
+        tip + right * half - fwd * half, tip - right * half - fwd * half,
+        f00, f01, f11, f10);
 }
 
 static const int kChunk = 16;
@@ -433,6 +476,7 @@ static const int kMeshY = 96;
 struct ChunkMesh {
     std::vector<MeshBatch> opaque;
     std::vector<MeshBatch> cutout;
+    std::vector<MeshBatch> leaves;
     std::vector<MeshVert> water;
 };
 
@@ -442,6 +486,7 @@ static void buildChunk(int cx, int cz) {
     ChunkMesh& chunk = gChunks[cx][cz];
     chunk.opaque.clear();
     chunk.cutout.clear();
+    chunk.leaves.clear();
     chunk.water.clear();
     int x0 = cx * kChunk;
     int z0 = cz * kChunk;
@@ -449,7 +494,7 @@ static void buildChunk(int cx, int cz) {
     int z1 = std::min(GRID - 1, z0 + kChunk - 1);
     auto solidBlock = [](Block b) {
         return b == Block::Grass || b == Block::Dirt || b == Block::Lava || b == Block::Stone
-            || b == Block::Obsidian || b == Block::Log || b == Block::Leaves;
+            || b == Block::Obsidian || b == Block::Log;
     };
     gCap = &chunk.opaque;
     gCapWater = nullptr;
@@ -457,6 +502,11 @@ static void buildChunk(int cx, int cz) {
         for (int z = z0; z <= z1; ++z)
             for (int y = 0; y <= kMeshY && y < HEIGHT; ++y)
                 if (solidBlock(blocks[x][y][z])) emitBox(x, y, z, 0.5f, true);
+    gCap = &chunk.leaves;
+    for (int x = x0; x <= x1; ++x)
+        for (int z = z0; z <= z1; ++z)
+            for (int y = 0; y <= kMeshY && y < HEIGHT; ++y)
+                if (blocks[x][y][z] == Block::Leaves) emitBox(x, y, z, 0.5f, true);
     gCap = &chunk.cutout;
     for (int x = x0; x <= x1; ++x)
         for (int z = z0; z <= z1; ++z)
@@ -575,6 +625,13 @@ void renderOpaqueBlocks(int renderRadiusXZ, int) {
             if (!chunkVisible(cx, cz, renderRadiusXZ)) continue;
             drawBatches(gChunks[cx][cz].opaque, false);
         }
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    for (int cx = 0; cx < kChunkCount; ++cx)
+        for (int cz = 0; cz < kChunkCount; ++cz)
+            if (chunkVisible(cx, cz, renderRadiusXZ))
+                drawBatches(gChunks[cx][cz].leaves, false);
+    glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
     for (int cx = 0; cx < kChunkCount; ++cx)
         for (int cz = 0; cz < kChunkCount; ++cz)

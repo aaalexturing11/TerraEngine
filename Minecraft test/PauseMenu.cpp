@@ -1,4 +1,5 @@
 #include "PauseMenu.h"
+#include "BlockSelection.h"
 #include "Camera.h"
 
 #include "imgui.h"
@@ -13,9 +14,15 @@ static const int MENU_ITEMS = 6;
 void pauseMenuUpdateInput(GLFWwindow* window, PauseMenuState& state) {
     bool escDown = (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS);
     if (escDown && !escPressedLastFrame) {
-        paused = !paused;
-        cameraResetMouse();
-        if (paused) menuIndex = 0;
+        if (inventoryOpen()) {
+            setInventoryOpen(false);
+            cameraResetMouse();
+        }
+        else {
+            paused = !paused;
+            cameraResetMouse();
+            if (paused) menuIndex = 0;
+        }
     }
     escPressedLastFrame = escDown;
 

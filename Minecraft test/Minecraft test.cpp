@@ -124,7 +124,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         ImGui::NewFrame();
 
         glLoadIdentity();
-        gluLookAt(camX, camY, camZ, camX + lookX, camY + lookY, camZ + lookZ, 0, 1, 0);
+        glm::vec3 bob = cameraBobOffset();
+        gluLookAt(camX + bob.x, camY + bob.y, camZ + bob.z,
+            camX + lookX + bob.x, camY + lookY + bob.y, camZ + lookZ + bob.z, 0, 1, 0);
 
         glm::vec3 viewDir = cameraLookDirection();
         glDepthMask(GL_FALSE);
@@ -137,8 +139,19 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         glDisable(GL_BLEND);
         glDepthMask(GL_TRUE);
 
-        cameraUpdateMovement(window, !paused, (float)(frameStart - lastFrameTime));
-        if (!paused) {
+        static bool eWasDown = false;
+        bool eDown = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
+        if (eDown && !eWasDown && !paused) {
+            setInventoryOpen(!inventoryOpen());
+            cameraResetMouse();
+        }
+        eWasDown = eDown;
+        bool uiOpen = paused || inventoryOpen();
+        cameraSetLookEnabled(!uiOpen);
+        glfwSetInputMode(window, GLFW_CURSOR, uiOpen ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+
+        cameraUpdateMovement(window, !uiOpen, (float)(frameStart - lastFrameTime));
+        if (!uiOpen) {
             updateSelectedBlock(window);
             tickWater((float)(frameStart - lastFrameTime));
         }
@@ -204,7 +217,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             if (i) ImGui::SameLine(0.0f, gap);
             ImGui::PushID(i);
             ImVec2 p = ImGui::GetCursorScreenPos();
-            if (icons[i]) ImGui::Image((ImTextureID)(intptr_t)icons[i], ImVec2(slot, slot));
+            if (icons[i]) ImGui::Image((ImTextureID)(intptr_t)icons[i], ImVec2(slot, slot), ImVec2(0, 1), ImVec2(1, 0));
             else ImGui::ColorButton("##c", i == 1 ? ImVec4(0.12f, 0.38f, 0.75f, 1.0f) : ImVec4(0.95f, 0.32f, 0.05f, 1.0f), ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop, ImVec2(slot, slot));
             ImDrawList* dl = ImGui::GetWindowDrawList();
             dl->AddRect(p, ImVec2(p.x + slot, p.y + slot), i == sel ? IM_COL32(255, 214, 80, 255) : IM_COL32(12, 12, 12, 230), 2.0f, 0, i == sel ? 3.0f : 1.5f);
@@ -213,6 +226,74 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             ImGui::PopID();
         }
         ImGui::End();
+
+        if (inventoryOpen()) {
+            struct Entry { Block block; unsigned tex; ImVec4 color; };
+            Entry items[] = {
+                { Block::Grass, blockTex.grassTop, ImVec4(1, 1, 1, 1) },
+                { Block::Dirt, blockTex.dirt, ImVec4(1, 1, 1, 1) },
+                { Block::Stone, blockTex.stone, ImVec4(1, 1, 1, 1) },
+                { Block::Log, blockTex.logTop, ImVec4(1, 1, 1, 1) },
+                { Block::Leaves, blockTex.leaves, ImVec4(1, 1, 1, 1) },
+                { Block::Water, 0, ImVec4(0.12f, 0.38f, 0.75f, 1) },
+                { Block::Lava, 0, ImVec4(0.95f, 0.32f, 0.05f, 1) },
+                { Block::Obsidian, 0, ImVec4(0.12f, 0.08f, 0.16f, 1) },
+                { Block::Torch, blockTex.torch, ImVec4(1, 1, 1, 1) },
+                { Block::TallGrass, blockTex.tallGrass, ImVec4(1, 1, 1, 1) },
+                { Block::Poppy, blockTex.poppy, ImVec4(1, 1, 1, 1) },
+                { Block::Triteleia, blockTex.triteleia, ImVec4(1, 1, 1, 1) },
+                { Block::TriteleiaRed, blockTex.triteleiaRed, ImVec4(1, 1, 1, 1) }
+            };
+            const int count = (int)(sizeof(items) / sizeof(items[0]));
+            ImGui::SetNextWindowPos(ImVec2(width * 0.5f, height * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            ImGui::SetNextWindowBgAlpha(0.92f);
+            ImGui::Begin("Inventario", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
+            ImGui::Text("Elige un bloque. E o Esc cierran.");
+            for (int i = 0; i < count; ++i) {
+                if (i % 7 != 0) ImGui::SameLine();
+                ImGui::BeginGroup();
+                ImGui::PushID(i + 100);
+                bool pressed = false;
+                if (items[i].tex) {
+                    pressed = ImGui::ImageButton("##icon", (ImTextureID)(intptr_t)items[i].tex, ImVec2(48, 48), ImVec2(0, 1), ImVec2(1, 0));
+                }
+                else {
+                    pressed = ImGui::ColorButton("##col", items[i].color, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop, ImVec2(48, 48));
+                }
+                if (pressed) {
+                    bool found = false;
+                    for (int s = 0; s < 10; ++s) {
+                        if (placeSlotBlock(s) == items[i].block) {
+                            selectPlaceSlot(s);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) setHotbarBlock(selectedPlaceSlot(), items[i].block);
+                }
+                const char* name = "Bloque";
+                switch (items[i].block) {
+                case Block::Grass: name = "Pasto"; break;
+                case Block::Dirt: name = "Tierra"; break;
+                case Block::Stone: name = "Piedra"; break;
+                case Block::Log: name = "Tronco"; break;
+                case Block::Leaves: name = "Hojas"; break;
+                case Block::Water: name = "Agua"; break;
+                case Block::Lava: name = "Lava"; break;
+                case Block::Obsidian: name = "Obsidiana"; break;
+                case Block::Torch: name = "Antorcha"; break;
+                case Block::TallGrass: name = "Pasto"; break;
+                case Block::Poppy: name = "Amapola"; break;
+                case Block::Triteleia: name = "Flor"; break;
+                case Block::TriteleiaRed: name = "Flor rosa"; break;
+                default: break;
+                }
+                ImGui::TextUnformatted(name);
+                ImGui::PopID();
+                ImGui::EndGroup();
+            }
+            ImGui::End();
+        }
 
         pauseMenuRender(width, height, menuState);
 
