@@ -182,7 +182,7 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
             grounded = false;
         }
         else if (!flying && grounded && !wet) {
-            bodyVy = 8.4f;
+            bodyVy = 8.37f;
             grounded = false;
         }
         lastSpaceTap = now;
@@ -278,7 +278,7 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
         camZ = pz;
         feet = (float)((double)camY - (double)kEye);
 
-        if (grounded && bodyVy <= 0.0f && groundedAt((float)camX, feet, (float)camZ)) {
+        if (bodyVy <= 0.0f && grounded && groundedAt((float)camX, feet, (float)camZ)) {
             feet = snapToSupport((float)camX, feet, (float)camZ);
             bodyVy = 0.0f;
             grounded = true;
@@ -322,16 +322,15 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
                 bodyVy = 0.0f;
                 grounded = false;
             }
+            else if (bodyVy <= 0.0f && groundedAt((float)camX, feet, (float)camZ)) {
+                feet = snapToSupport((float)camX, feet, (float)camZ);
+                bodyVy = 0.0f;
+                grounded = true;
+                airTime = 0.0f;
+            }
             else {
-                grounded = groundedAt((float)camX, feet, (float)camZ);
-                if (grounded) {
-                    feet = snapToSupport((float)camX, feet, (float)camZ);
-                    bodyVy = 0.0f;
-                    airTime = 0.0f;
-                }
-                else {
-                    airTime += dt;
-                }
+                grounded = false;
+                airTime += dt;
             }
         }
     }

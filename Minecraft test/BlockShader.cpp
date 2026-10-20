@@ -143,9 +143,7 @@ void main() {
     wave += cos(p.z * 1.28 - uTime * 0.85) * 0.01;
     wave += sin((p.x + p.z) * 0.62 + uTime * 0.55) * 0.008;
     if (gl_Normal.y > 0.5) {
-        float surface = textureLod(uHeight, p.xz / uWorld, 0.0).r;
-        if (surface > 0.01) p.y = surface;
-        p.y += wave + textureLod(uRipple, p.xz / uWorld, 0.0).r * 0.09;
+        p.y += wave + textureLod(uRipple, p.xz / uWorld, 0.0).r * 0.07;
     }
     else if (vFlow.z < 1.5 && vLip > 1.0) {
         float h = max(vLip - p.y, 0.0);
@@ -202,23 +200,22 @@ void main() {
         }
         float stream = clamp(vFlow.w, 0.0, 1.0);
         float h = max(vLip - vWorld.y, 0.0);
-        float speed = sqrt(h * 2.6 + 0.2);
-        float along = fract(sqrt(h + 0.08) * 5.0 - uTime * (0.7 + speed));
-        float breakup = smoothstep(0.2, 3.4, h);
-        breakup = mix(breakup * 0.35, breakup, 1.0 - stream * 0.45);
-        float dropLen = mix(0.7, 0.14, breakup);
-        float drop = smoothstep(0.0, 0.03, along) * smoothstep(dropLen, dropLen * 0.32, along);
-        float satellite = fract(along + 0.46);
-        satellite = smoothstep(0.0, 0.02, satellite) * smoothstep(0.11, 0.03, satellite) * breakup;
-        float core = (1.0 - breakup) * mix(0.3, 1.0, stream);
+        float speed = sqrt(h * 2.2 + 0.15);
+        float along = fract(sqrt(h + 0.05) * 3.4 - uTime * (0.55 + speed * 0.85));
+        float breakup = smoothstep(0.8, 4.5, h);
+        float dropLen = mix(0.85, 0.16, breakup);
+        float drop = smoothstep(0.0, 0.04, along) * smoothstep(dropLen, dropLen * 0.28, along);
+        float satellite = fract(along * 1.7 + 0.38);
+        satellite = smoothstep(0.0, 0.03, satellite) * smoothstep(0.13, 0.04, satellite) * breakup;
+        float core = (1.0 - breakup * 0.85) * mix(0.15, 0.65, stream);
         float across = abs(vAcross * 2.0 - 1.0);
-        float halfW = mix(0.5, 0.98, stream) * mix(1.0, 0.38, breakup);
-        float bulge = mix(0.7, 1.08, max(drop, satellite));
+        float halfW = mix(0.22, 0.55, stream) * mix(1.0, 0.32, breakup);
+        float bulge = mix(0.75, 1.15, max(drop, satellite));
         if (across > halfW * bulge) discard;
-        if (core < 0.05 && drop < 0.05 && satellite < 0.05) discard;
-        vec3 body = mix(vec3(0.02, 0.28, 0.42), vec3(0.70, 0.92, 0.98), max(drop, satellite));
+        if (core < 0.04 && drop < 0.05 && satellite < 0.05) discard;
+        vec3 body = mix(vec3(0.03, 0.30, 0.46), vec3(0.72, 0.93, 0.98), max(drop, satellite));
         vec3 col = mix(body, uSky * vec3(0.75, 0.9, 1.0), fres * 0.72);
-        float alpha = mix(0.18, 0.82, max(core, max(drop, satellite)));
+        float alpha = mix(0.22, 0.78, max(core, max(drop, satellite)));
         fragColor = vec4(col, alpha);
         return;
     }

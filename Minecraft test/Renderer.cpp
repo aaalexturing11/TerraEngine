@@ -277,8 +277,10 @@ static WaterCorner sampleCorner(int cx, int cz, int y) {
             bool falling = fd > 0.5f || waterLevelAt(wx, y + 1, wz) >= 0;
             float top = (float)y + waterFill01(wx, y, wz);
             if (top < (float)y + 0.04f) top = (float)y + 0.04f;
+            if (solid(wx, y + 1, wz) && top > (float)y + 0.97f) top = (float)y + 0.97f;
             if (!lip && falling) {
                 top = y + 1.0f;
+                if (solid(wx, y + 1, wz)) top = y + 0.97f;
                 column = true;
             }
             h += top;
@@ -350,44 +352,43 @@ static void drawWater(int bx, int by, int bz) {
         WaterCorner c11 = sampleCorner(bx + 1, bz + 1, by);
         WaterCorner c01 = sampleCorner(bx, bz + 1, by);
         surfaceY = (c00.h + c10.h + c11.h + c01.h) * 0.25f;
+        float x0 = (float)bx, x1 = (float)bx + 1.0f;
+        float z0 = (float)bz, z1 = (float)bz + 1.0f;
+        if (solid(bx - 1, by, bz)) x0 += 0.03f;
+        if (solid(bx + 1, by, bz)) x1 -= 0.03f;
+        if (solid(bx, by, bz - 1)) z0 += 0.03f;
+        if (solid(bx, by, bz + 1)) z1 -= 0.03f;
         if (!gCapWater) {
             glBegin(GL_QUADS);
             glNormal3f(0, 1, 0);
         }
         auto vert = [&](const WaterCorner& c, float x, float z) {
-            pushWater(glm::vec3(x, c.h, z), glm::vec3(0, 1, 0), c.fx, c.fz, c.down, 0, 0, 0);
+            float h = c.h;
+            int ix = (int)std::floor(x - (x > (float)bx + 0.5f ? 0.01f : 0.0f));
+            int iz = (int)std::floor(z - (z > (float)bz + 0.5f ? 0.01f : 0.0f));
+            if (solid(ix, by + 1, iz) && h > (float)by + 0.97f) h = (float)by + 0.97f;
+            pushWater(glm::vec3(x, h, z), glm::vec3(0, 1, 0), c.fx, c.fz, c.down, 0, 0, 0);
         };
-        vert(c00, (float)bx, (float)bz);
-        vert(c01, (float)bx, (float)bz + 1);
-        vert(c11, (float)bx + 1, (float)bz + 1);
-        vert(c10, (float)bx + 1, (float)bz);
+        vert(c00, x0, z0);
+        vert(c01, x0, z1);
+        vert(c11, x1, z1);
+        vert(c10, x1, z0);
         if (!gCapWater) glEnd();
     }
     if (!gCapWater) glBegin(GL_QUADS);
     if (lip) {
         int y = by - 1;
-        while (y > 0 && cellOpen(bx, y, bz)) --y;
-        float yBot = (blockAt(bx, y, bz) == Block::Water) ? (float)y + 0.96f : (float)(y + 1);
-        float yTop = surfaceY;
-        if (yTop < (float)by + 0.35f) yTop = (float)by + 0.35f;
-        if (yTop - yBot > 0.2f) {
-            float flen = std::sqrt(fx * fx + fz * fz);
-            glm::vec2 fwd = flen > 0.2f ? glm::vec2(fx / flen, fz / flen) : glm::vec2(0.0f, 1.0f);
-            glm::vec2 side(-fwd.y, fwd.x);
-            float hw = 0.16f + 0.30f * strength;
-            float hd = 0.05f + 0.10f * strength;
-            float cx = bx + 0.5f + fwd.x * 0.22f;
-            float cz = bz + 0.5f + fwd.y * 0.22f;
-            glm::vec2 corner[4] = {
-                glm::vec2(cx, cz) + fwd * hd + side * hw,
-                glm::vec2(cx, cz) - fwd * hd + side * hw,
-                glm::vec2(cx, cz) - fwd * hd - side * hw,
-                glm::vec2(cx, cz) + fwd * hd - side * hw
-            };
-            for (int i = 0; i < 4; ++i) {
-                glm::vec2 a = corner[i];
-                glm::vec2 b = corner[(i + 1) & 3];
-                drawWaterFace(a.x, a.y, b.x, b.y, yBot, yTop, fx, fz, 1.0f, strength, yTop);
+        while (y > 0 && cellOpen(bx, y, bz) && !solid(bx, y, bz)) --y;
+        if (solid(bx, y, bz) || blockAt(bx, y, bz) == Block::Water) {
+            float yBot = (blockAt(bx, y, bz) == Block::Water) ? (float)y + waterFill01(bx, y, bz) : (float)(y + 1);
+            float yTop = surfaceY;
+            if (yTop < (float)by + 0.2f) yTop = (float)by + 0.2f;
+            if (yTop - yBot > 0.15f) {
+                float cx = bx + 0.5f;
+                float cz = bz + 0.5f;
+                float hw = 0.04f + 0.03f * strength;
+                drawWaterFace(cx - hw, cz - hw, cx + hw, cz + hw, yBot, yTop, fx, fz, 1.0f, strength, yTop);
+                drawWaterFace(cx - hw, cz + hw, cx + hw, cz - hw, yBot, yTop, fx, fz, 1.0f, strength, yTop);
             }
         }
     }

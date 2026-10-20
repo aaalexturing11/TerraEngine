@@ -15,10 +15,16 @@ struct Drop {
     float life, age, size;
 };
 
+struct FallSrc {
+    float x, yTop, yBot, z, rate, acc;
+};
+
+static std::vector<FallSrc> gFalls;
+
 static std::vector<Drop> gDrops;
 static unsigned gRng = 1u;
 
-static const int RS = 4;
+static const int RS = 2;
 static const int RN = GRID * RS;
 static std::vector<float> gRipCur(RN * RN, 0.0f);
 static std::vector<float> gRipPrev(RN * RN, 0.0f);
@@ -47,15 +53,16 @@ static void rippleDisturb(float wx, float wz, float radius, float amount) {
 }
 
 static void rebuildMask() {
-    for (int bz = 0; bz < GRID; ++bz)
-        for (int bx = 0; bx < GRID; ++bx) {
-            bool wet = false;
-            for (int y = 0; y < 96 && !wet; ++y)
-                if (blocks[bx][y][bz] == Block::Water) wet = true;
-            for (int sz = 0; sz < RS; ++sz)
-                for (int sx = 0; sx < RS; ++sx)
-                    gRipMask[(bz * RS + sz) * RN + bx * RS + sx] = wet ? 1 : 0;
-        }
+    std::fill(gRipMask.begin(), gRipMask.end(), 0);
+    int n = waterCellCount();
+    for (int i = 0; i < n; ++i) {
+        int bx, by, bz;
+        getWaterCell(i, bx, by, bz);
+        if (bx < 0 || bz < 0 || bx >= GRID || bz >= GRID) continue;
+        for (int sz = 0; sz < RS; ++sz)
+            for (int sx = 0; sx < RS; ++sx)
+                gRipMask[(bz * RS + sz) * RN + bx * RS + sx] = 1;
+    }
 }
 
 static void rippleStep() {
@@ -197,58 +204,63 @@ static void projectSplash(float wx, float wy, float wz, float speed, float& outX
 }
 
 static void pushDrop(float x, float y, float z, float vx, float vy, float vz, float size, float life) {
-    if (gDrops.size() > 480) gDrops.erase(gDrops.begin());
+    if (solid((int)std::floor(x), (int)std::floor(y), (int)std::floor(z))) return;
+    if (gDrops.size() > 80) return;
     gDrops.push_back({ x, y, z, vx, vy, vz, life, 0.0f, size });
 }
 
-void fluidStream(float x, float yTop, float yBot, float z, float strength) {
-    if (strength < 0.08f) return;
-    if (yTop < yBot + 0.15f) return;
-    int n = 2 + (int)(strength * 4.0f);
-    if (n > 8) n = 8;
-    for (int i = 0; i < n; ++i) {
-        float t = rnd();
-        float y = yTop - t * t * (yTop - yBot);
-        float vx = (rnd() - 0.5f) * 0.55f;
-        float vz = (rnd() - 0.5f) * 0.55f;
-        float vy = -2.4f - t * 8.0f * strength;
-        float size = 0.028f + rnd() * 0.05f * strength;
-        pushDrop(x + vx * 0.08f, y, z + vz * 0.08f, vx, vy, vz, size, 0.28f + rnd() * 0.35f);
+void fluidClearFalls() {
+    for (FallSrc& f : gFalls) f.rate = 0.0f;
+}
+
+void fluidAddFall(float x, float yTop, float yBot, float z, float rate) {
+    if (yTop < yBot + 0.2f) return;
+    if (rate < 0.02f) rate = 0.02f;
+    for (FallSrc& f : gFalls) {
+        if (std::fabs(f.x - x) < 0.05f && std::fabs(f.z - z) < 0.05f && std::fabs(f.yTop - yTop) < 0.2f) {
+            f.rate += rate;
+            if (yBot < f.yBot) f.yBot = yBot;
+            return;
+        }
     }
+    gFalls.push_back({ x, yTop, yBot, z, rate, 0.0f });
+}
+
+void fluidStream(float x, float yTop, float yBot, float z, float strength) {
+    fluidAddFall(x, yTop, yBot, z, strength);
 }
 
 void fluidImpact(float x, float y, float z, float speed, float mass) {
     if (speed < 0.0f) speed = -speed;
     if (speed < 1.2f || mass <= 0.0f) return;
     float energy = 0.5f * mass * speed * speed;
-    int count = (int)(energy / 140.0f);
-    if (count < 4) count = 4;
-    if (count > 64) count = 64;
-    float kick = speed * 0.42f;
-    if (kick > 9.0f) kick = 9.0f;
+    int count = (int)(energy / 280.0f);
+    if (count < 2) count = 2;
+    if (count > 16) count = 16;
+    float kick = speed * 0.32f;
+    if (kick > 6.0f) kick = 6.0f;
 
-    float gx, gy, gz;
-    projectSplash(x, y, z, speed, gx, gy, gz);
+    float gx = 0.0f, gy = 0.0f, gz = 0.0f;
+    if (mass > 40.0f)
+        projectSplash(x, y, z, speed, gx, gy, gz);
 
-    float sink = std::sqrt(energy) * 0.012f;
-    if (sink > 1.6f) sink = 1.6f;
-    float radius = 0.35f + std::sqrt(mass) * 0.05f;
-    if (radius > 1.1f) radius = 1.1f;
+    float sink = std::sqrt(energy) * 0.008f;
+    if (sink > 1.0f) sink = 1.0f;
+    float radius = 0.28f + std::sqrt(mass) * 0.04f;
+    if (radius > 0.85f) radius = 0.85f;
     rippleDisturb(x, z, radius, sink);
 
     for (int i = 0; i < count; ++i) {
         float ang = rnd() * 6.2831853f;
-        float rad = 0.15f + rnd() * 0.55f;
-        float up = 0.35f + rnd() * 0.9f;
-        float px = x + std::cos(ang) * rad * 0.25f;
-        float pz = z + std::sin(ang) * rad * 0.25f;
-        float py = y + rnd() * 0.08f;
-        float svx = std::cos(ang) * kick * (0.35f + rnd() * 0.65f) + gx * 0.45f;
-        float svz = std::sin(ang) * kick * (0.35f + rnd() * 0.65f) + gz * 0.45f;
-        float svy = up * kick * 0.85f + gy * 0.5f;
-        float size = 0.035f + rnd() * 0.05f + speed * 0.0015f;
-        if (size > 0.14f) size = 0.14f;
-        pushDrop(px, py, pz, svx, svy, svz, size, 0.45f + rnd() * 0.7f);
+        float rad = 0.12f + rnd() * 0.4f;
+        float px = x + std::cos(ang) * rad * 0.22f;
+        float pz = z + std::sin(ang) * rad * 0.22f;
+        float py = y + rnd() * 0.06f;
+        float svx = std::cos(ang) * kick * (0.35f + rnd() * 0.65f) + gx * 0.35f;
+        float svz = std::sin(ang) * kick * (0.35f + rnd() * 0.65f) + gz * 0.35f;
+        float svy = (0.3f + rnd() * 0.7f) * kick * 0.8f + gy * 0.4f;
+        float size = 0.03f + rnd() * 0.04f;
+        pushDrop(px, py, pz, svx, svy, svz, size, 0.35f + rnd() * 0.4f);
     }
 }
 
@@ -279,14 +291,38 @@ void fluidTick(float dt) {
         }
     }
 
+    const float G = 22.0f;
+    size_t fw = 0;
+    for (size_t i = 0; i < gFalls.size(); ++i) {
+        FallSrc f = gFalls[i];
+        if (f.rate <= 0.001f) continue;
+        float spawn = 2.2f + f.rate * 2.5f;
+        if (spawn > 4.5f) spawn = 4.5f;
+        f.acc += dt * spawn;
+        while (f.acc >= 1.0f) {
+            f.acc -= 1.0f;
+            float jx = (rnd() - 0.5f) * 0.06f;
+            float jz = (rnd() - 0.5f) * 0.06f;
+            float h = f.yTop - f.yBot;
+            if (h < 0.2f) h = 0.2f;
+            float life = std::sqrt(2.0f * h / G) + 0.12f;
+            pushDrop(f.x + jx, f.yTop - rnd() * 0.03f, f.z + jz,
+                jx * 1.4f, -0.5f - rnd() * 0.3f, jz * 1.4f,
+                0.02f + rnd() * 0.02f,
+                life);
+        }
+        gFalls[fw++] = f;
+    }
+    gFalls.resize(fw);
+
     size_t w = 0;
     for (size_t i = 0; i < gDrops.size(); ++i) {
         Drop d = gDrops[i];
         d.age += dt;
         if (d.age >= d.life) continue;
-        d.vy -= 18.0f * dt;
-        d.vx *= (1.0f - 1.6f * dt);
-        d.vz *= (1.0f - 1.6f * dt);
+        d.vy -= G * dt;
+        d.vx *= (1.0f - 0.35f * dt);
+        d.vz *= (1.0f - 0.35f * dt);
         float nx = d.x + d.vx * dt;
         float ny = d.y + d.vy * dt;
         float nz = d.z + d.vz * dt;
@@ -294,13 +330,10 @@ void fluidTick(float dt) {
         int iy = (int)std::floor(ny);
         int iz = (int)std::floor(nz);
         if (solid(ix, iy, iz)) {
-            d.vy = -d.vy * 0.28f;
-            d.vx *= 0.4f;
-            d.vz *= 0.4f;
-            if (d.vy < 0.8f && d.vy > -0.8f) continue;
+            continue;
         }
-        else if (blockAt(ix, iy, iz) == Block::Water && d.age > 0.08f) {
-            rippleDisturb(nx, nz, 0.22f, d.size * 1.6f);
+        else if (blockAt(ix, iy, iz) == Block::Water && d.age > 0.06f) {
+            rippleDisturb(nx, nz, 0.16f, d.size * 1.1f);
             continue;
         }
         else {
@@ -326,10 +359,19 @@ void fluidDraw() {
     glBegin(GL_QUADS);
     for (const Drop& d : gDrops) {
         float fade = 1.0f - d.age / d.life;
-        float s = d.size * (0.7f + 0.3f * fade);
+        float s = d.size * (0.75f + 0.25f * fade);
+        glm::vec3 vel(d.vx, d.vy, d.vz);
+        float spd = glm::length(vel);
+        glm::vec3 along = spd > 0.15f ? vel / spd : glm::vec3(0, -1, 0);
+        float stretch = 1.0f + spd * 0.07f;
+        if (stretch > 3.2f) stretch = 3.2f;
+        glm::vec3 side = glm::cross(along, look);
+        float sl = glm::length(side);
+        if (sl < 0.001f) side = right;
+        else side /= sl;
         glm::vec3 c(d.x, d.y, d.z);
-        glm::vec3 r = right * s;
-        glm::vec3 u = up * s;
+        glm::vec3 r = side * s;
+        glm::vec3 u = along * (s * stretch);
         glm::vec3 p[4] = { c - r - u, c + r - u, c + r + u, c - r + u };
         float uv[4][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
         for (int i = 0; i < 4; ++i) {
