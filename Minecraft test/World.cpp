@@ -984,17 +984,6 @@ static int surfaceY(int x, int y, int z) {
     return y;
 }
 
-static int receiveY(int x, int z, int fromY) {
-    if (!inBounds(x, fromY, z)) return -1;
-    Block b = getB(x, fromY, z);
-    if (b == Block::Air || b == Block::Torch || isPlant(b)) return fromY;
-    if (b == Block::Water) {
-        int top = surfaceY(x, fromY, z);
-        if (top + 1 <= fromY && canEnterWater(x, top + 1, z)) return top + 1;
-    }
-    return -1;
-}
-
 static bool placeFlow(int x, int y, int z, int lv) {
     if (!canEnterWater(x, y, z)) return false;
     Chunk* c = chunkOf(x, z);
@@ -1026,35 +1015,6 @@ static float addFillTo(int x, int y, int z, float amount, int lv, bool& changed)
     refFill(x, y, z) = (unsigned char)(have + amount + 0.5f);
     chunkOf(x, z)->edited = true;
     return amount;
-}
-
-static int addVolume(int x, int y, int z) {
-    if (!inBounds(x, y, z) || getB(x, y, z) != Block::Water) return y;
-    int top = surfaceY(x, y, z);
-    int bestX = x, bestZ = z, bestY = HEIGHT;
-    const int dir[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
-    for (int i = 0; i < 4; ++i) {
-        int ry = receiveY(x + dir[i][0], z + dir[i][1], top);
-        if (ry >= 0 && ry < bestY) {
-            bestY = ry;
-            bestX = x + dir[i][0];
-            bestZ = z + dir[i][1];
-        }
-    }
-    bool changed = false;
-    if (bestY <= top) {
-        addFillTo(bestX, bestY, bestZ, 10.0f, 1, changed);
-        erasePlantsNear(bestX, bestY, bestZ);
-        return bestY;
-    }
-    float extra = addFillTo(x, top, z, 10.0f, 1, changed);
-    if (extra > 0) return top;
-    if (top + 1 < HEIGHT && canEnterWater(x, top + 1, z)) {
-        addFillTo(x, top + 1, z, 10.0f, 1, changed);
-        erasePlantsNear(x, top + 1, z);
-        return top + 1;
-    }
-    return top;
 }
 
 float waterFill01(int x, int y, int z) {
@@ -1224,12 +1184,8 @@ void waterImpact(int x, int y, int z, float vy, float mass) {
     if (getB(x, sy, z) != Block::Water) return;
     sy = surfaceY(x, sy, z);
     float speed = vy < 0.0f ? -vy : vy;
-    if (mass > 40.0f && speed > 12.0f)
-        addVolume(x, sy, z);
     fluidImpact((float)x + 0.5f, (float)sy + 0.95f, (float)z + 0.5f, speed, mass);
     gImpactLock = 0.28f;
-    relightRegion(x, sy, z);
-    markMeshArea(x - 6, z - 6, x + 6, z + 6);
 }
 
 void tickWater(float dt) {
