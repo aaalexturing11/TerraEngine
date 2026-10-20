@@ -147,8 +147,6 @@ FaceLight evaluateFace(int bx, int by, int bz, const glm::vec3& normal) {
         f.gi = manualClamp(sampleSkyForFace(bx, by, bz, normal.x, normal.y, normal.z), 0.0f, 1.0f);
         f.blockLight = manualClamp(sampleLampForFace(bx, by, bz, normal.x, normal.y, normal.z), 0.0f, 1.0f);
         f.ao = faceAmbientOcclusion(bx, by, bz, glm::ivec3(normal));
-        if (normal.y > 0.4f && f.gi < 0.38f) f.gi = 0.38f;
-        else if (f.gi < 0.16f) f.gi = 0.16f;
     }
     f.caustic = (b == Block::Grass || b == Block::Dirt || b == Block::Stone) ? causticAmount(bx, by, bz) : 0.0f;
     return f;

@@ -1,0 +1,6 @@
+name=Nuevo mundo
+seed=2898717914
+sx=49
+sy=53
+sz=-241
+day=398.337

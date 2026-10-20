@@ -32,16 +32,6 @@ static float gTrailX = 0.0f;
 static float gTrailZ = 0.0f;
 static bool gTrailHas = false;
 
-struct Lens {
-    float u, v, r, alpha;
-    float vu, vv;
-    float hold, age, life;
-    float restV, stretch;
-    int phase;
-};
-static Lens gLens[12];
-static int gLensN = 0;
-
 static void pushRing(float x, float z, float when, float amp) {
     if (amp < 0.02f) return;
     if (amp > 0.22f) amp = 0.22f;
@@ -50,88 +40,6 @@ static void pushRing(float x, float z, float when, float amp) {
     gRings[gRingCursor].birth = when;
     gRings[gRingCursor].amp = amp;
     gRingCursor = (gRingCursor + 1) % 8;
-}
-
-static void pushLensDrop(bool fromTop, float sizeMul) {
-    int slot = gLensN;
-    if (slot >= 12) {
-        slot = 0;
-        float oldest = -1.0f;
-        for (int i = 0; i < 12; ++i) {
-            float t = gLens[i].age / gLens[i].life;
-            if (t > oldest) { oldest = t; slot = i; }
-        }
-    }
-    else gLensN++;
-    Lens& d = gLens[slot];
-    d.u = 0.08f + rnd() * 0.84f;
-    d.vu = (rnd() - 0.5f) * 0.04f;
-    d.r = (0.016f + rnd() * 0.038f) * sizeMul;
-    d.alpha = 0.82f + rnd() * 0.18f;
-    d.hold = 0.35f + rnd() * 0.85f;
-    d.age = 0.0f;
-    d.life = 3.4f + rnd() * 2.2f;
-    d.stretch = 0.0f;
-    d.vv = 0.0f;
-    if (fromTop) {
-        d.v = 1.04f + rnd() * 0.45f;
-        d.vv = -0.42f - rnd() * 0.55f;
-        d.restV = 0.18f + rnd() * 0.68f;
-        d.phase = 0;
-    }
-    else {
-        d.v = 0.15f + rnd() * 0.72f;
-        d.restV = d.v;
-        d.phase = 1;
-    }
-}
-
-static void spawnLens(float strength) {
-    if (strength < 0.2f) strength = 0.2f;
-    if (strength > 1.4f) strength = 1.4f;
-    int n = 6 + (int)(strength * 6.0f);
-    if (n > 12) n = 12;
-    for (int i = 0; i < n; ++i)
-        pushLensDrop(rnd() < 0.7f, 0.75f + strength * 0.45f);
-}
-
-static void tickLens(float dt) {
-    int w = 0;
-    for (int i = 0; i < gLensN; ++i) {
-        Lens d = gLens[i];
-        d.age += dt;
-        if (d.v < -0.06f || d.alpha < 0.04f) continue;
-        if (d.phase != 0 && d.age > d.life) continue;
-        if (d.phase == 0) {
-            d.v += d.vv * dt;
-            d.u += d.vu * dt;
-            if (d.v <= d.restV) {
-                d.v = d.restV;
-                d.vv = 0.0f;
-                d.phase = 1;
-                d.age = 0.0f;
-            }
-        }
-        else if (d.phase == 1) {
-            if (d.age > d.hold) {
-                d.phase = 2;
-                d.vv = -0.015f - rnd() * 0.02f;
-            }
-        }
-        else {
-            d.vv -= 0.28f * dt;
-            if (d.vv < -0.22f) d.vv = -0.22f;
-            d.v += d.vv * dt;
-            d.u += d.vu * dt;
-            d.stretch += (-d.vv) * dt * 0.85f;
-            if (d.stretch > 0.22f) d.stretch = 0.22f;
-            d.alpha -= dt * 0.22f;
-            d.r *= (1.0f - 0.10f * dt);
-        }
-        if (d.u < -0.05f || d.u > 1.05f) continue;
-        gLens[w++] = d;
-    }
-    gLensN = w;
 }
 
 static float rnd() {
@@ -565,8 +473,6 @@ void fluidImpact(float x, float y, float z, float speed, float mass) {
         float rad = 0.25f + rnd() * 0.7f;
         pushRing(x + std::cos(ang) * rad, z + std::sin(ang) * rad, gClock + 0.06f + rnd() * 0.12f, amp * 0.42f);
     }
-    if (speed >= 3.0f)
-        spawnLens((speed - 2.0f) / 7.0f);
 
     int count = (int)(energy / 160.0f);
     if (count < 6) count = 6;
@@ -643,7 +549,6 @@ void fluidTick(float dt) {
         gDrops[w++] = d;
     }
     gDrops.resize(w);
-    tickLens(dt);
 
     gFftTime += dt;
     gFftClock += dt;
@@ -740,24 +645,4 @@ void fluidBindMotion(unsigned program) {
     if (r >= 0) glx.Uniform4fv(r, 8, rings);
     if (w >= 0) glx.Uniform4fv(w, 16, wake);
     if (d >= 0) glx.Uniform4fv(d, 16, dir);
-}
-
-void fluidCopyLens(float* lens, float* extra, int maxN) {
-    for (int i = 0; i < maxN; ++i) {
-        lens[i * 4 + 0] = 0.0f;
-        lens[i * 4 + 1] = 0.0f;
-        lens[i * 4 + 2] = 0.0f;
-        lens[i * 4 + 3] = 0.0f;
-        extra[i * 4 + 0] = 0.0f;
-        extra[i * 4 + 1] = 0.0f;
-        extra[i * 4 + 2] = 0.0f;
-        extra[i * 4 + 3] = 0.0f;
-        if (i >= gLensN) continue;
-        const Lens& d = gLens[i];
-        lens[i * 4 + 0] = d.u;
-        lens[i * 4 + 1] = d.v;
-        lens[i * 4 + 2] = d.r;
-        lens[i * 4 + 3] = d.alpha;
-        extra[i * 4 + 0] = d.stretch;
-    }
 }

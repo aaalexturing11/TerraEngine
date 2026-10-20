@@ -41,6 +41,8 @@ Block blockAt(int x, int y, int z);
 
 void worldSetSeed(unsigned seed);
 unsigned worldGetSeed();
+void worldBindSave(const char* worldId);
+void worldSaveEdits();
 void worldReset();
 void initializeWorld();
 int worldStreamAround(float x, float z);

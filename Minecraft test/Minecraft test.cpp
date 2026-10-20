@@ -153,6 +153,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 
         int generated = 0;
         if (inWorld) {
+            static double nextWorldSave = 0.0;
+            if (frameStart >= nextWorldSave) {
+                gameMenuSaveProgress();
+                nextWorldSave = frameStart + 8.0;
+            }
             cameraUpdateMovement(window, !uiOpen, (float)(frameStart - lastFrameTime));
             generated = worldStreamAround((float)camX, (float)camZ);
             setMeshBudget(1);
@@ -381,6 +386,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
                 std::this_thread::sleep_for(std::chrono::duration<double>(target - frameTime));
             }
         }
+        if (glfwWindowShouldClose(window))
+            gameMenuSaveProgress();
     }
 
     clearWorldMeshes();

@@ -24,6 +24,7 @@ float loadProgress = 0.0f;
 double worldTimeOrigin = 0.0;
 
 static bool escPressedLastFrame = false;
+static bool enterPressedLast = false;
 static bool upPressedLast = false, downPressedLast = false, zPressedLast = false;
 static int menuIndex = 0;
 static const int MENU_ITEMS = 7;
@@ -33,6 +34,7 @@ struct WorldEntry {
     char name[64];
     unsigned seed;
     int sx, sy, sz;
+    double day;
 };
 
 static std::vector<WorldEntry> gWorlds;
@@ -87,7 +89,7 @@ static void writeMeta(const WorldEntry& e) {
     std::snprintf(path, sizeof(path), "worlds/%s/meta.txt", e.id);
     FILE* f = nullptr;
     if (fopen_s(&f, path, "w") != 0 || !f) return;
-    std::fprintf(f, "name=%s\nseed=%u\nsx=%d\nsy=%d\nsz=%d\n", e.name, e.seed, e.sx, e.sy, e.sz);
+    std::fprintf(f, "name=%s\nseed=%u\nsx=%d\nsy=%d\nsz=%d\nday=%.3f\n", e.name, e.seed, e.sx, e.sy, e.sz, e.day);
     std::fclose(f);
 }
 
@@ -112,6 +114,7 @@ static bool readMeta(const char* id, WorldEntry& e) {
         else if (std::strncmp(line, "sx=", 3) == 0) e.sx = (int)std::strtol(line + 3, nullptr, 10);
         else if (std::strncmp(line, "sy=", 3) == 0) e.sy = (int)std::strtol(line + 3, nullptr, 10);
         else if (std::strncmp(line, "sz=", 3) == 0) e.sz = (int)std::strtol(line + 3, nullptr, 10);
+        else if (std::strncmp(line, "day=", 4) == 0) e.day = std::strtod(line + 4, nullptr);
     }
     std::fclose(f);
     if (e.seed == 0) e.seed = 1;
@@ -151,6 +154,7 @@ static void beginLoad(const WorldEntry& e, bool isNew) {
     worldReset();
     clearWorldMeshes();
     worldSetSeed(gCurrent.seed);
+    worldBindSave(gCurrent.id);
     if (isNew || (gCurrent.sx == 0 && gCurrent.sz == 0 && gCurrent.sy == SEA_LEVEL)) {
         worldFindSpawn(gCurrent.sx, gCurrent.sy, gCurrent.sz);
     }
@@ -175,19 +179,26 @@ bool gameMenuInWorld() {
     return gameScreen == GameScreen::Playing;
 }
 
-void gameMenuLeaveWorld() {
-    if (gCurrent.id[0]) {
-        gCurrent.sx = (int)std::floor(camX);
-        gCurrent.sz = (int)std::floor(camZ);
-        gCurrent.sy = (int)std::floor(camY - 1.62 - 1.0);
-        writeMeta(gCurrent);
-        for (size_t i = 0; i < gWorlds.size(); ++i) {
-            if (std::strcmp(gWorlds[i].id, gCurrent.id) == 0) {
-                gWorlds[i] = gCurrent;
-                break;
-            }
+void gameMenuSaveProgress() {
+    if (!gCurrent.id[0] || gameScreen != GameScreen::Playing) return;
+    gCurrent.sx = (int)std::floor(camX);
+    gCurrent.sz = (int)std::floor(camZ);
+    gCurrent.sy = (int)std::floor(camY - 1.62 - 1.0);
+    double elapsed = glfwGetTime() - worldTimeOrigin;
+    if (elapsed < 0.0) elapsed = 0.0;
+    gCurrent.day = elapsed;
+    writeMeta(gCurrent);
+    for (size_t i = 0; i < gWorlds.size(); ++i) {
+        if (std::strcmp(gWorlds[i].id, gCurrent.id) == 0) {
+            gWorlds[i] = gCurrent;
+            break;
         }
     }
+    worldSaveEdits();
+}
+
+void gameMenuLeaveWorld() {
+    gameMenuSaveProgress();
     worldReset();
     clearWorldMeshes();
     setInventoryOpen(false);
@@ -216,11 +227,22 @@ void gameMenuTickLoading() {
 
     if (missC == 0 && missM <= 0) {
         refreshWaterHeights();
-        worldFixSpawn(gCurrent.sx, gCurrent.sy, gCurrent.sz);
-        if (blockAt(gCurrent.sx, gCurrent.sy, gCurrent.sz) == Block::Water
-            || blockAt(gCurrent.sx, gCurrent.sy + 1, gCurrent.sz) == Block::Water) {
-            worldFindSpawn(gCurrent.sx, gCurrent.sy, gCurrent.sz);
+        if (gLoadingNew) {
             worldFixSpawn(gCurrent.sx, gCurrent.sy, gCurrent.sz);
+            if (blockAt(gCurrent.sx, gCurrent.sy, gCurrent.sz) == Block::Water
+                || blockAt(gCurrent.sx, gCurrent.sy + 1, gCurrent.sz) == Block::Water) {
+                worldFindSpawn(gCurrent.sx, gCurrent.sy, gCurrent.sz);
+                worldFixSpawn(gCurrent.sx, gCurrent.sy, gCurrent.sz);
+            }
+        }
+        else {
+            for (int n = 0; n < 8; ++n) {
+                if (gCurrent.sy < 1) gCurrent.sy = 1;
+                if (!solid(gCurrent.sx, gCurrent.sy + 1, gCurrent.sz)
+                    && !solid(gCurrent.sx, gCurrent.sy + 2, gCurrent.sz))
+                    break;
+                ++gCurrent.sy;
+            }
         }
         cameraSetSpawn(gCurrent.sx, gCurrent.sy, gCurrent.sz);
         writeMeta(gCurrent);
@@ -236,7 +258,7 @@ void gameMenuTickLoading() {
             if (!found) gWorlds.push_back(gCurrent);
             writeIndex();
         }
-        worldTimeOrigin = glfwGetTime();
+        worldTimeOrigin = glfwGetTime() - gCurrent.day;
         loadProgress = 1.0f;
         gameScreen = GameScreen::Playing;
         paused = false;
@@ -281,8 +303,10 @@ void titleBarRender(GLFWwindow* window, int width, int height, const PauseMenuSt
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("TerraEngine");
     ImGui::SameLine((float)width - 36.0f);
-    if (ImGui::Button("X", ImVec2(26.0f, 22.0f)))
+    if (ImGui::Button("X", ImVec2(26.0f, 22.0f))) {
+        gameMenuSaveProgress();
         glfwSetWindowShouldClose(window, GLFW_TRUE);
+    }
     bool overBar = ImGui::IsWindowHovered() && !ImGui::IsItemHovered();
     if (overBar && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         double mx = 0.0, my = 0.0;
@@ -308,7 +332,10 @@ void pauseMenuUpdateInput(GLFWwindow* window, PauseMenuState& state) {
             else {
                 paused = !paused;
                 cameraResetMouse();
-                if (paused) menuIndex = 0;
+                if (paused) {
+                    menuIndex = 0;
+                    gameMenuSaveProgress();
+                }
             }
         }
         else if (gameScreen == GameScreen::Worlds || gameScreen == GameScreen::Create) {
@@ -320,12 +347,14 @@ void pauseMenuUpdateInput(GLFWwindow* window, PauseMenuState& state) {
     bool upDown = (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS);
     bool downDown = (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS);
     bool zDown = (glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS);
+    bool enterDown = glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS
+        || glfwGetKey(window, GLFW_KEY_KP_ENTER) == GLFW_PRESS;
 
     if (paused && gameScreen == GameScreen::Playing) {
         if (upDown && !upPressedLast) menuIndex = (menuIndex - 1 + MENU_ITEMS) % MENU_ITEMS;
         if (downDown && !downPressedLast) menuIndex = (menuIndex + 1) % MENU_ITEMS;
 
-        if (zDown && !zPressedLast) {
+        if ((zDown && !zPressedLast) || (enterDown && !enterPressedLast)) {
             switch (menuIndex) {
             case 0:
                 paused = false;
@@ -335,6 +364,7 @@ void pauseMenuUpdateInput(GLFWwindow* window, PauseMenuState& state) {
                 gameMenuLeaveWorld();
                 break;
             case 2:
+                gameMenuSaveProgress();
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
                 break;
             case 3:
@@ -372,6 +402,7 @@ void pauseMenuUpdateInput(GLFWwindow* window, PauseMenuState& state) {
     upPressedLast = upDown;
     downPressedLast = downDown;
     zPressedLast = zDown;
+    enterPressedLast = enterDown;
 }
 
 static void drawTitle(int width, int height) {
@@ -498,15 +529,20 @@ void pauseMenuRender(int width, int height, const PauseMenuState& state) {
     ImGui::Begin("PauseMenu", nullptr, flags);
     ImGui::Text("Juego en pausa");
     ImGui::Spacing();
-    if (menuIndex == 0) ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 0, 255));
-    ImGui::Text("Reanudar");
-    if (menuIndex == 0) ImGui::PopStyleColor();
-    if (menuIndex == 1) ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 0, 255));
-    ImGui::Text("Guardar y salir al menu");
-    if (menuIndex == 1) ImGui::PopStyleColor();
-    if (menuIndex == 2) ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 0, 255));
-    ImGui::Text("Salir del juego");
-    if (menuIndex == 2) ImGui::PopStyleColor();
+    if (ImGui::Selectable("Reanudar", menuIndex == 0)) {
+        menuIndex = 0;
+        paused = false;
+        cameraResetMouse();
+    }
+    if (ImGui::Selectable("Guardar y salir al menu", menuIndex == 1)) {
+        menuIndex = 1;
+        gameMenuLeaveWorld();
+    }
+    if (ImGui::Selectable("Salir del juego", menuIndex == 2)) {
+        menuIndex = 2;
+        gameMenuSaveProgress();
+        glfwSetWindowShouldClose(glfwGetCurrentContext(), GLFW_TRUE);
+    }
     if (menuIndex == 3) ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 0, 255));
     if (state.isFullscreen) ImGui::Text("Modo ventana"); else ImGui::Text("Pantalla completa");
     if (menuIndex == 3) ImGui::PopStyleColor();

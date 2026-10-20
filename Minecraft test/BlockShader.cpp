@@ -122,7 +122,7 @@ void main() {
     float wrap = clamp(ndl * 0.78 + 0.22, 0.0, 1.0);
     float ndm = max(dot(n, normalize(uMoonDir)), 0.0);
     float vis = shadowVis(vWorld + n * 0.08, ndl);
-    float skyVis = mix(0.5, 1.0, smoothstep(0.2, 0.9, sky));
+    float skyVis = clamp(sky, 0.0, 1.0);
     float hemi = clamp(n.y * 0.5 + 0.5, 0.0, 1.0);
     vec3 albedo = vAlbedo;
     float alpha = 1.0;
@@ -134,13 +134,13 @@ void main() {
         } else if (texel.a < 0.4) discard;
         albedo *= texel.rgb;
     }
-    vec3 skyFill = uSky * (0.10 + 0.34 * hemi) * skyVis;
-    vec3 groundFill = vec3(0.20, 0.14, 0.08) * (1.0 - hemi) * 0.28 * skyVis;
+    vec3 skyFill = uSky * (0.08 + 0.32 * hemi) * skyVis;
+    vec3 groundFill = vec3(0.16, 0.11, 0.07) * (1.0 - hemi) * 0.22 * skyVis;
     vec3 indirect = albedo * (skyFill + groundFill + uAmbient * skyVis) * ao;
-    vec3 lampCol = albedo * vec3(1.0, 0.58, 0.24) * lamp * 1.25;
+    vec3 lampCol = albedo * vec3(1.0, 0.58, 0.24) * lamp * 1.35;
     vec3 sun = albedo * uSunColor * wrap * vis * skyVis * uSunAmt;
-    vec3 shadowSky = albedo * uSky * (1.0 - vis) * skyVis * 0.28 * uSunAmt;
-    vec3 moon = albedo * uMoonColor * ndm * (0.35 + 0.65 * hemi) * ao;
+    vec3 shadowSky = albedo * uSky * (1.0 - vis) * skyVis * 0.22 * uSunAmt;
+    vec3 moon = albedo * uMoonColor * ndm * (0.35 + 0.65 * hemi) * ao * skyVis;
     float wave = 0.6 + 0.4 * sin(uTime * 2.5 + vWorld.x * 7.5 + vWorld.z * 6.5);
     vec3 caustics = vec3(0.55, 0.95, 0.90) * cau * wave * uSunAmt * skyVis * 0.85;
     vec3 glow = albedo * emit * 2.6;
@@ -155,15 +155,24 @@ static const char* kWaterVs = R"GLSL(
 #version 330 compatibility
 out vec3 vWorld;
 out vec3 vNormal;
+out vec3 vWaveN;
 out vec4 vFlow;
 out float vAcross;
 out float vLip;
+out float vLift;
+out float vOpen;
 uniform float uTime;
-uniform sampler2D uRipple;
-uniform sampler2D uHeight;
-uniform sampler2D uFft;
-uniform float uWorld;
-uniform vec2 uHeightOrigin;
+
+void swell(inout vec3 p, inout vec3 n, vec2 dir, float amp, float len) {
+    float k = 6.2831853 / len;
+    float w = sqrt(9.8 * k);
+    float f = k * dot(dir, p.xz) - w * uTime;
+    float s = sin(f);
+    float c = cos(f);
+    p.y += amp * s;
+    n.x -= dir.x * (k * amp) * c;
+    n.z -= dir.y * (k * amp) * c;
+}
 
 void main() {
     vec3 p = gl_Vertex.xyz;
@@ -171,6 +180,21 @@ void main() {
     vAcross = gl_MultiTexCoord1.x;
     vLip = gl_MultiTexCoord1.y;
     vNormal = gl_Normal;
+    vLift = 0.0;
+    vOpen = 0.0;
+    vWaveN = gl_Normal;
+    float wgt = gl_MultiTexCoord2.x;
+    if (wgt > 0.01) {
+        float baseY = p.y;
+        vOpen = wgt;
+        float scale = wgt;
+        vec3 n = vec3(0.0, 1.0, 0.0);
+        swell(p, n, normalize(vec2(1.0, 0.18)), 0.48 * scale, 36.0);
+        swell(p, n, normalize(vec2(0.15, 1.0)), 0.28 * scale, 22.0);
+        swell(p, n, normalize(vec2(-0.72, 0.68)), 0.14 * scale, 13.0);
+        if (gl_Normal.y > 0.45) vWaveN = normalize(n);
+        vLift = p.y - baseY;
+    }
     vWorld = p;
     gl_Position = gl_ModelViewProjectionMatrix * vec4(p, 1.0);
 }
@@ -180,9 +204,12 @@ static const char* kWaterFs = R"GLSL(
 #version 330 compatibility
 in vec3 vWorld;
 in vec3 vNormal;
+in vec3 vWaveN;
 in vec4 vFlow;
 in float vAcross;
 in float vLip;
+in float vLift;
+in float vOpen;
 out vec4 fragColor;
 uniform vec3 uCam;
 uniform vec3 uSky;
@@ -290,42 +317,55 @@ void main() {
 
     bool below = uCam.y < vWorld.y - 0.08;
     vec3 L = normalize(uSunDir);
+    vec3 waveN = normalize(vWaveN);
     if (below) {
-        vec3 toSurf = normalize(vWorld - uCam);
-        float up = max(dot(toSurf, vec3(0.0, 1.0, 0.0)), 0.0);
-        float sun = pow(max(dot(toSurf, L), 0.0), 5.0);
-        vec3 windowCol = uSky * vec3(0.82, 0.93, 1.05);
-        vec3 waterCol = vec3(0.08, 0.42, 0.48);
-        vec3 col = mix(waterCol, windowCol, 0.35 + up * 0.55);
-        col += vec3(1.0, 0.97, 0.88) * sun * uSunAmt * 2.2;
-        float shaft = sin(vWorld.x * 0.35 + uTime * 0.5) * sin(vWorld.z * 0.28 - uTime * 0.32);
-        shaft = smoothstep(0.05, 0.65, shaft * 0.5 + 0.5);
-        col += vec3(0.65, 0.95, 0.88) * shaft * uSunAmt * (0.35 + sun);
-        fragColor = vec4(col, mix(0.72, 0.35, sun));
+        vec3 view = normalize(uCam - vWorld);
+        float up = clamp(view.y, 0.0, 1.0);
+        float window = smoothstep(0.12, 0.78, up);
+        vec3 waterCol = vec3(0.015, 0.14, 0.22);
+        vec3 skyCol = uSky * vec3(0.82, 0.92, 1.02);
+        vec3 col = mix(waterCol, skyCol, window * 0.72);
+        float sun = pow(max(dot(normalize(vWorld - uCam), L), 0.0), 28.0) * window;
+        col += vec3(1.0, 0.98, 0.92) * sun * uSunAmt * 0.28;
+        fragColor = vec4(col, mix(0.9, 0.42, window));
         return;
     }
 
     float dist = length(vWorld.xz - uCam.xz);
-    if (dist > 96.0) {
-        vec3 farCol = mix(vec3(0.04, 0.24, 0.36), uSky * vec3(0.72, 0.88, 1.0), 0.55);
-        float fog = smoothstep(118.0, 168.0, dist);
-        farCol = mix(farCol, uSky, fog);
-        fragColor = vec4(farCol, 0.86);
-        return;
-    }
-    vec2 uvA = vWorld.xz / 67.0;
-    float e = 0.02;
+    vec2 uvA = vWorld.xz / 16.0;
+    float e = 0.035;
     float hL = texture(uFft, uvA - vec2(e, 0.0)).x;
     float hR = texture(uFft, uvA + vec2(e, 0.0)).x;
     float hD = texture(uFft, uvA - vec2(0.0, e)).x;
     float hU = texture(uFft, uvA + vec2(0.0, e)).x;
-    float detail = 1.0 - smoothstep(40.0, 120.0, dist);
-    vec3 n = normalize(vec3((hL - hR) * detail, 1.15, (hD - hU) * detail));
+    float detail = (1.0 - smoothstep(50.0, 150.0, dist)) * mix(0.35, 1.0, vOpen);
+    vec3 n = normalize(waveN + vec3((hL - hR) * detail, 0.0, (hD - hU) * detail));
     vec2 ruv = (vWorld.xz - uHeightOrigin) / max(uWorld, 1.0);
     float re = 1.5 / max(uWorld, 1.0);
     float hx = texture(uRipple, ruv + vec2(re, 0.0)).r - texture(uRipple, ruv - vec2(re, 0.0)).r;
     float hz = texture(uRipple, ruv + vec2(0.0, re)).r - texture(uRipple, ruv - vec2(0.0, re)).r;
-    n = normalize(n + vec3(-hx, 0.0, -hz) * detail * 0.8);
+    n = normalize(n + vec3(-hx, 0.0, -hz) * detail * 0.55);
+
+    vec3 view = normalize(uCam - vWorld);
+    vec3 H = normalize(L + view);
+    float ndv = max(dot(n, view), 0.0);
+    float ndh = max(dot(n, H), 0.0);
+    float fresnel = 0.02 + 0.62 * pow(1.0 - ndv, 5.0);
+    float spark = smoothstep(0.42, 0.9, fract(sin(dot(floor(vWorld.xz * 1.7), vec2(12.9, 78.2))) * 43758.5));
+    vec3 glint = vec3(1.0, 0.98, 0.92) * uSunAmt * (pow(ndh, 7.0) * 0.16 + pow(ndh, 90.0) * (0.25 + spark) * 1.15);
+    glint *= 1.0 - smoothstep(150.0, 210.0, dist);
+
+    if (dist > 88.0) {
+        vec3 sea = mix(vec3(0.03, 0.18, 0.30), uSky * vec3(0.62, 0.82, 0.98), 0.35);
+        vec3 col = mix(sea, uSky * vec3(0.78, 0.9, 1.0), clamp(fresnel, 0.0, 0.75));
+        col += glint;
+        float crest = smoothstep(0.28, 0.62, vLift) * vOpen;
+        col = mix(col, vec3(0.82, 0.9, 0.93), crest * 0.35);
+        float fog = smoothstep(130.0, 200.0, dist);
+        col = mix(col, uSky, fog);
+        fragColor = vec4(col, 0.92);
+        return;
+    }
 
     float splashCrest = 0.0;
     float wakeFoam = 0.0;
@@ -339,33 +379,28 @@ void main() {
         n = normalize(n + vec3(hxM, 0.0, hzM) * 4.2);
     }
 
-    vec3 view = normalize(uCam - vWorld);
     vec2 uv = gl_FragCoord.xy / vec2(textureSize(uScene, 0));
-    vec2 distort = n.xz * (0.004 + 0.006 * detail);
+    vec2 distort = n.xz * (0.012 + 0.01 * detail);
     vec2 texCoordRefract = clamp(uv + distort, vec2(0.001), vec2(0.999));
 
     float sceneD = texture(uDepth, uv).r;
     float thick = sceneD > 0.998 ? 14.0 : max(linearDepth(sceneD) - linearDepth(gl_FragCoord.z), 0.0);
-    float shallow = 1.0 - smoothstep(0.35, 1.35, thick);
-    float absorb = mix(clamp(0.58 + thick * 0.045, 0.58, 0.94), 0.22, shallow);
+    float shallow = 1.0 - smoothstep(0.4, 2.2, thick);
+    float absorb = mix(clamp(0.62 + thick * 0.04, 0.62, 0.92), 0.18, shallow);
 
-    vec3 H = normalize(L + view);
-    float ndv = max(dot(n, view), 0.0);
-    float fresnel = 0.02 + 0.42 * pow(1.0 - ndv, 4.0);
+    ndv = max(dot(n, view), 0.0);
+    fresnel = 0.02 + 0.62 * pow(1.0 - ndv, 5.0);
+    H = normalize(L + view);
+    ndh = max(dot(n, H), 0.0);
+    glint = vec3(1.0, 0.98, 0.92) * uSunAmt * (pow(ndh, 7.0) * 0.16 + pow(ndh, 90.0) * (0.25 + spark) * 1.15);
 
-    vec3 deep = vec3(0.02, 0.20, 0.30);
+    vec3 deep = mix(vec3(0.015, 0.12, 0.22), vec3(0.05, 0.32, 0.38), shallow);
     vec3 refr = mix(texture(uScene, texCoordRefract).rgb, deep, absorb);
-    vec3 sky = uSky * vec3(0.72, 0.88, 1.0);
-    vec3 col = mix(refr, sky, clamp(fresnel, 0.0, 0.62));
-    col += vec3(0.95, 0.98, 1.0) * pow(max(dot(n, H), 0.0), 64.0) * uSunAmt * 0.35;
-
-    if (thick > 2.4 && uSunAmt > 0.12) {
-        float shaft = sin(vWorld.x * 0.48 + vWorld.z * 0.27 + uTime * 0.40);
-        shaft *= sin(vWorld.x * 0.17 - vWorld.z * 0.36 + uTime * 0.22);
-        shaft = smoothstep(0.12, 0.78, shaft * 0.5 + 0.5);
-        float deepAmt = clamp((thick - 2.4) / 5.0, 0.0, 1.0);
-        col += vec3(0.45, 0.82, 0.78) * shaft * max(dot(n, L), 0.0) * uSunAmt * deepAmt * 0.42;
-    }
+    vec3 sky = uSky * vec3(0.70, 0.86, 1.0);
+    vec3 col = mix(refr, sky, clamp(fresnel, 0.0, 0.72));
+    col += glint;
+    float crest = smoothstep(0.22, 0.55, vLift) * vOpen;
+    col = mix(col, vec3(0.86, 0.93, 0.95), crest * 0.45);
 
     float occ = texture(uHeight, ruv).g;
     float shore = (1.0 - smoothstep(0.15, 0.72, occ)) * shallow;

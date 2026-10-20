@@ -3,7 +3,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <direct.h>
 #include <unordered_map>
 #include <vector>
 
@@ -156,11 +159,13 @@ void worldColumnSpan(int x, int z, int& y0, int& y1) {
 }
 
 static unsigned gWorldSeed = 1u;
+static unsigned gClimateGen = 1u;
 static float gOffX = 0.0f, gOffZ = 0.0f, gFreq = 1.0f, gRotC = 1.0f, gRotS = 0.0f;
 
 void worldSetSeed(unsigned seed) {
     if (seed == 0) seed = 1;
     gWorldSeed = seed;
+    ++gClimateGen;
     gOffX = (float)(seed & 65535u) * 4.17f + (float)((seed >> 16) & 255u) * 80.0f;
     gOffZ = (float)((seed >> 7) & 65535u) * 3.91f + (float)(seed & 255u) * 60.0f;
     gFreq = 0.82f + (float)((seed >> 3) % 7u) * 0.06f;
@@ -244,6 +249,7 @@ struct ColGen {
     int ground;
     int waterTo;
     bool ocean, lake, beach, mountain, forest;
+    int cover;
 };
 
 struct Climate {
@@ -253,24 +259,29 @@ struct Climate {
 static Climate climatePoint(int x, int z) {
     Climate c;
     noisePos(x, z, c.ox, c.oz);
-    c.cont = fbm(c.ox * 0.00125f, c.oz * 0.00125f, 11, 4);
-    c.range = fbm(c.ox * 0.00105f, c.oz * 0.00105f, 29, 3);
-    c.ridge = 1.0f - std::abs(fbm(c.ox * 0.0054f, c.oz * 0.0041f, 47, 3));
-    c.hill = fbm(c.ox * 0.0088f, c.oz * 0.0088f, 73, 3);
-    c.sea = fbm(c.ox * 0.00082f, c.oz * 0.00082f, 211, 3);
-    c.moist = fbm(c.ox * 0.0044f + 18.0f, c.oz * 0.0044f, 131, 2);
+    float j = 0.72f + (float)((gWorldSeed >> 5) & 7u) * 0.1f;
+    float warp = 18.0f + (float)(gWorldSeed % 48u);
+    c.ox += fbm(c.ox * 0.0022f, c.oz * 0.0022f, 501, 2) * warp;
+    c.oz += fbm(c.ox * 0.0022f + 4.0f, c.oz * 0.0022f, 577, 2) * warp;
+    c.cont = fbm(c.ox * 0.00115f * j, c.oz * 0.00105f * j, 11, 4);
+    c.range = fbm(c.ox * 0.00135f * j, c.oz * 0.00092f * j, 29, 3);
+    c.ridge = 1.0f - std::abs(fbm(c.ox * 0.0064f, c.oz * 0.0046f, 47, 3));
+    c.hill = fbm(c.ox * 0.0072f * j, c.oz * 0.0081f * j, 73, 3);
+    c.sea = fbm(c.ox * 0.00142f * j, c.oz * 0.00122f * j, 211, 4);
+    c.moist = fbm(c.ox * 0.0034f + 12.0f, c.oz * 0.0038f, 131, 3);
     return c;
 }
 
 static Climate climateAt(int x, int z) {
     int x0 = divFloor(x, 4) * 4;
     int z0 = divFloor(z, 4) * 4;
-    struct Slot { int x, z; Climate c; bool ok; };
+    struct Slot { int x, z; unsigned gen; Climate c; bool ok; };
     static Slot slots[128];
     auto cached = [&](int sx, int sz) {
         unsigned h = ((unsigned)sx * 73856093u) ^ ((unsigned)sz * 19349663u);
         Slot& s = slots[h & 127u];
-        if (!s.ok || s.x != sx || s.z != sz) {
+        if (!s.ok || s.gen != gClimateGen || s.x != sx || s.z != sz) {
+            s.gen = gClimateGen;
             s.ok = true;
             s.x = sx;
             s.z = sz;
@@ -311,34 +322,64 @@ static ColGen columnGen(int x, int z) {
     float sea = cl.sea;
     float moist = cl.moist;
     float ox = cl.ox, oz = cl.oz;
-    float mt = smooth01((range - 0.16f) / 0.42f) * smooth01((ridge - 0.58f) / 0.28f);
+    float mt = smooth01((range - 0.10f) / 0.46f) * smooth01((ridge - 0.52f) / 0.32f);
+    float peakScale = 0.78f + (float)((gWorldSeed >> 9) & 7u) * 0.08f;
 
     ColGen g;
     g.ground = SEA_LEVEL;
     g.waterTo = -1;
     g.ocean = g.lake = g.beach = g.mountain = g.forest = false;
+    g.cover = moist > 0.16f ? 2 : (moist < -0.18f ? 0 : 1);
 
-    if (sea < -0.66f && mt < 0.18f) {
-        g.ocean = true;
-        float depth = (-0.66f - sea) * 18.0f + detail * 1.5f;
-        if (depth < 2.0f) depth = 2.0f;
-        if (depth > 16.0f) depth = 16.0f;
-        g.ground = SEA_LEVEL - (int)depth;
-        g.waterTo = SEA_LEVEL;
+    if (sea < -0.30f && mt < 0.40f) {
+        float isle = fbm(ox * 0.018f, oz * 0.018f, 307, 3);
+        if (isle > 0.30f) {
+            g.ground = SEA_LEVEL + 2 + (int)((isle - 0.30f) * 16.0f);
+            if (g.ground > SEA_LEVEL + 9) g.ground = SEA_LEVEL + 9;
+            g.cover = g.cover == 0 ? 1 : g.cover;
+            g.forest = g.cover == 2;
+        }
+        else if (isle > 0.14f) {
+            g.beach = true;
+            g.ground = SEA_LEVEL + (isle > 0.22f ? 1 : 0);
+            g.cover = 0;
+        }
+        else {
+            g.ocean = true;
+            float depth = (-0.30f - sea) * 16.0f + (0.35f - isle) * 6.0f + detail;
+            if (depth < 6.0f) depth = 6.0f;
+            if (depth > 18.0f) depth = 18.0f;
+            g.ground = SEA_LEVEL - (int)depth;
+            g.waterTo = SEA_LEVEL;
+            g.cover = 0;
+        }
     }
-    else if (sea < -0.50f && mt < 0.22f) {
+    else if (sea < -0.12f && mt < 0.36f) {
         g.beach = true;
-        g.ground = SEA_LEVEL - 1 + (int)((sea + 0.66f) * 16.0f + detail);
+        g.cover = 0;
+        float t = (sea + 0.30f) / 0.18f;
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+        g.ground = SEA_LEVEL - 2 + (int)(t * 5.0f + detail * 0.8f);
         if (g.ground < SEA_LEVEL) g.waterTo = SEA_LEVEL;
+        if (g.ground > SEA_LEVEL + 2) g.ground = SEA_LEVEL + 2;
     }
     else {
-        float base = 6.0f + hill * 8.0f + detail * 2.2f + cont * 3.0f;
+        float flat = 1.0f - smooth01((hill + 0.22f) / 0.68f);
+        float base = 4.0f + (1.0f - flat) * (5.0f + hill * 9.0f) + flat * hill * 1.5f + detail * 1.5f + cont * 1.6f;
         if (base < 3.0f) base = 3.0f;
-        float foot = smooth01((range - 0.02f) / 0.28f) * ridge * 10.0f;
-        float peak = mt * mt * (46.0f + ridge * 42.0f + detail * 5.0f);
+        float foot = smooth01((range - 0.02f) / 0.30f) * ridge * 8.0f;
+        float peak = mt * mt * (28.0f + ridge * 34.0f) * peakScale;
         g.ground = SEA_LEVEL + (int)(base + foot + peak);
-        g.mountain = mt > 0.34f;
-        if (!g.mountain && moist > -0.08f) g.forest = true;
+        g.mountain = mt > 0.40f && g.ground > SEA_LEVEL + 24;
+        if (g.mountain && g.ground > SEA_LEVEL + 40 && g.cover == 2) g.cover = 1;
+        g.forest = !g.mountain && g.cover == 2;
+        if (flat > 0.78f && !g.mountain && sea > -0.05f) {
+            int lift = (int)(detail + 1.5f);
+            if (lift < 0) lift = 0;
+            g.ground = SEA_LEVEL + 4 + lift;
+            if (g.ground > SEA_LEVEL + 7) g.ground = SEA_LEVEL + 7;
+        }
     }
 
     if (!g.ocean && !g.beach && mt < 0.20f) {
@@ -391,80 +432,90 @@ static void verticalColumn(int x, int z) {
     }
 }
 
-static void seedCell(int x, int y, int z) {
-    if (!inBounds(x, y, z)) return;
-    Block b = getB(x, y, z);
-    if (blockInfo(b).blocksSky && b != Block::Lava) {
-        refSky(x, y, z) = 0;
-        refLamp(x, y, z) = 0;
-    }
-    else if (b == Block::Lava) {
-        refSky(x, y, z) = 0;
-        refLamp(x, y, z) = 255;
-    }
-    else if (b == Block::Torch) {
-        refLamp(x, y, z) = 255;
-    }
-}
-
 static const int kDir[6][3] = {
     { 1, 0, 0 }, { -1, 0, 0 },
     { 0, 1, 0 }, { 0, -1, 0 },
     { 0, 0, 1 }, { 0, 0, -1 }
 };
 
-static void floodBox(int x0, int y0, int z0, int x1, int y1, int z1, int passes) {
-    if (y0 < 0) y0 = 0;
-    if (y1 >= HEIGHT) y1 = HEIGHT - 1;
-    for (int x = x0; x <= x1; ++x)
-        for (int y = y0; y <= y1; ++y)
-            for (int z = z0; z <= z1; ++z)
-                seedCell(x, y, z);
+static const int kSkyStep = 14;
+static const int kSkyRadius = 20;
 
-    const float skyDecay = 0.58f;
-    const float lampDecay = 0.64f;
-    for (int pass = 0; pass < passes; ++pass) {
-        for (int x = x0; x <= x1; ++x) {
-            for (int y = y0; y <= y1; ++y) {
-                for (int z = z0; z <= z1; ++z) {
-                    if (!inBounds(x, y, z)) continue;
-                    Block here = getB(x, y, z);
-                    if (blockInfo(here).blocksSky && here != Block::Lava) continue;
-                    float bestSky = (float)refSky(x, y, z) * (1.0f / 255.0f);
-                    float bestLamp = (float)refLamp(x, y, z) * (1.0f / 255.0f);
-                    for (int d = 0; d < 6; ++d) {
-                        int nx = x + kDir[d][0], ny = y + kDir[d][1], nz = z + kDir[d][2];
-                        if (!inBounds(nx, ny, nz)) continue;
-                        Block nb = getB(nx, ny, nz);
-                        if (blockInfo(nb).blocksSky && nb != Block::Lava) continue;
-                        float inSky = (float)refSky(nx, ny, nz) * (1.0f / 255.0f) * skyDecay;
-                        float inLamp = (float)refLamp(nx, ny, nz) * (1.0f / 255.0f) * lampDecay;
-                        if (nb == Block::Water) {
-                            inSky *= 0.85f;
-                            inLamp *= 0.9f;
-                        }
-                        if (inSky > bestSky) bestSky = inSky;
-                        if (inLamp > bestLamp) bestLamp = inLamp;
+static bool skyPassable(Block b) {
+    return !(blockInfo(b).blocksSky && b != Block::Lava);
+}
+
+static void spreadLight(int x0, int y0, int z0, int x1, int y1, int z1) {
+    struct Node { int x, y, z; };
+    std::vector<Node> skyQ;
+    std::vector<Node> lampQ;
+    skyQ.reserve(2048);
+    lampQ.reserve(512);
+    auto inside = [&](int x, int y, int z) {
+        return x >= x0 && x <= x1 && y >= y0 && y <= y1 && z >= z0 && z <= z1;
+    };
+    int cx0 = divFloor(x0 - 1, CHUNK), cx1 = divFloor(x1 + 1, CHUNK);
+    int cz0 = divFloor(z0 - 1, CHUNK), cz1 = divFloor(z1 + 1, CHUNK);
+    for (int cz = cz0; cz <= cz1; ++cz)
+        for (int cx = cx0; cx <= cx1; ++cx) {
+            Chunk* c = findChunk(cx, cz);
+            if (!c) continue;
+            for (int lz = 0; lz < CHUNK; ++lz)
+                for (int lx = 0; lx < CHUNK; ++lx) {
+                    int wx = cx * CHUNK + lx;
+                    int wz = cz * CHUNK + lz;
+                    bool inCol = wx >= x0 && wx <= x1 && wz >= z0 && wz <= z1;
+                    bool shell = !inCol && wx >= x0 - 1 && wx <= x1 + 1 && wz >= z0 - 1 && wz <= z1 + 1;
+                    if (!inCol && !shell) continue;
+                    for (int y = 0; y < HEIGHT; ++y) {
+                        int i = cidx(lx, y, lz);
+                        Block b = c->vol[i];
+                        if (!skyPassable(b)) continue;
+                        if ((int)c->sky[i] > kSkyStep) skyQ.push_back({ wx, y, wz });
+                        if (c->lamp[i] > 8) lampQ.push_back({ wx, y, wz });
                     }
-                    if (here == Block::Torch || here == Block::Lava)
-                        bestLamp = bestLamp > 1.0f ? bestLamp : 1.0f;
-                    refSky(x, y, z) = (unsigned char)(bestSky * 255.0f + 0.5f);
-                    refLamp(x, y, z) = (unsigned char)(bestLamp * 255.0f + 0.5f);
                 }
+        }
+    for (size_t head = 0; head < skyQ.size(); ++head) {
+        int x = skyQ[head].x, y = skyQ[head].y, z = skyQ[head].z;
+        int give = (int)refSky(x, y, z) - kSkyStep;
+        Block src = getB(x, y, z);
+        if (src == Block::Water) give -= 10;
+        else if (src == Block::Leaves) give -= 8;
+        if (give <= 0) continue;
+        for (int d = 0; d < 6; ++d) {
+            int nx = x + kDir[d][0], ny = y + kDir[d][1], nz = z + kDir[d][2];
+            if (!inside(nx, ny, nz) || !inBounds(nx, ny, nz)) continue;
+            if (!skyPassable(getB(nx, ny, nz))) continue;
+            if (give > (int)refSky(nx, ny, nz)) {
+                refSky(nx, ny, nz) = (unsigned char)give;
+                skyQ.push_back({ nx, ny, nz });
+            }
+        }
+    }
+    for (size_t head = 0; head < lampQ.size(); ++head) {
+        int x = lampQ[head].x, y = lampQ[head].y, z = lampQ[head].z;
+        int give = (int)refLamp(x, y, z) * 64 / 100;
+        if (getB(x, y, z) == Block::Water) give = give * 9 / 10;
+        if (give <= 8) continue;
+        for (int d = 0; d < 6; ++d) {
+            int nx = x + kDir[d][0], ny = y + kDir[d][1], nz = z + kDir[d][2];
+            if (!inside(nx, ny, nz) || !inBounds(nx, ny, nz)) continue;
+            if (!skyPassable(getB(nx, ny, nz))) continue;
+            if (give > (int)refLamp(nx, ny, nz)) {
+                refLamp(nx, ny, nz) = (unsigned char)give;
+                lampQ.push_back({ nx, ny, nz });
             }
         }
     }
 }
 
 static void relightRegion(int x, int y, int z) {
-    const int r = 4;
+    const int r = kSkyRadius;
     for (int ix = x - r; ix <= x + r; ++ix)
         for (int iz = z - r; iz <= z + r; ++iz)
             verticalColumn(ix, iz);
-    int y0 = y - 4, y1 = y + 4;
-    if (y0 < 0) y0 = 0;
-    if (y1 >= HEIGHT) y1 = HEIGHT - 1;
-    floodBox(x - r, y0, z - r, x + r, y1, z + r, 4);
+    spreadLight(x - r, 0, z - r, x + r, HEIGHT - 1, z + r);
 }
 
 static void placeInChunk(Chunk* c, int wx, int y, int wz, Block b) {
@@ -557,7 +608,7 @@ static void generateChunk(Chunk* c) {
                 if (y == g.ground) {
                     if (g.ocean || g.lake) b = Block::Dirt;
                     else if (g.beach) b = Block::Dirt;
-                    else if (g.mountain && (slope >= 3 || g.ground > SEA_LEVEL + 26)) b = Block::Stone;
+                    else if (g.mountain && (slope >= 4 || g.ground > SEA_LEVEL + 34)) b = Block::Stone;
                     else b = Block::Grass;
                 }
                 else if (y >= g.ground - 3) b = (g.mountain && slope >= 2) ? Block::Stone : Block::Dirt;
@@ -578,22 +629,92 @@ static void generateChunk(Chunk* c) {
             bool wet = colWet[ci] != 0;
             int wx = c->cx * CHUNK + lx;
             int wz = c->cz * CHUNK + lz;
-            bool entrance = !wet && (mixHash(wx, wz, 901) % 240) == 0;
-            int yTop = wet ? ground - 5 : (entrance ? ground : ground - 4);
+            bool entrance = !wet && (mixHash(wx, wz, 901) % 520) == 0;
+            int yTop = ground - 5;
+            if (entrance) yTop = ground;
+            if (wet) yTop = ground - 6;
             if (yTop > HEIGHT - 2) yTop = HEIGHT - 2;
-            if (yTop < 6) continue;
-            for (int y = 4; y <= yTop; y += 2) {
-                float cheese = valueNoise3((float)wx * 0.04f, (float)y * 0.06f, (float)wz * 0.04f, 301);
-                bool cave = cheese > 0.67f;
-                if (!cave) continue;
-                for (int yy = y; yy <= y + 1 && yy <= yTop; ++yy) {
-                    Block cur = c->vol[cidx(lx, yy, lz)];
-                    if (cur == Block::Air || cur == Block::Water) continue;
-                    setVol(c, lx, yy, lz, Block::Air);
-                    if (yy > 0 && (int)carveLo[ci] > yy - 1) carveLo[ci] = (unsigned char)(yy - 1);
+            if (yTop < 8) continue;
+            int lowest = 255;
+            for (int y = 6; y <= yTop; ++y) {
+                float n1 = valueNoise3((float)wx * 0.026f, (float)y * 0.062f, (float)wz * 0.026f, 301);
+                float n2 = valueNoise3((float)wx * 0.05f + 19.0f, (float)y * 0.09f, (float)wz * 0.05f, 877);
+                if (n1 < 0.66f || n2 < 0.60f) continue;
+                if (y >= ground - 1 && !entrance) continue;
+                Block cur = c->vol[cidx(lx, y, lz)];
+                if (cur == Block::Air || cur == Block::Water) continue;
+                setVol(c, lx, y, lz, Block::Air);
+                if (y - 1 < lowest) lowest = y - 1;
+            }
+            if (lowest < 255 && lowest < (int)carveLo[ci]) carveLo[ci] = (unsigned char)lowest;
+        }
+
+    unsigned char carvePad[CHUNK + 2][CHUNK + 2];
+    for (int z = 0; z < CHUNK + 2; ++z)
+        for (int x = 0; x < CHUNK + 2; ++x) carvePad[x][z] = 255;
+    for (int lz = 0; lz < CHUNK; ++lz)
+        for (int lx = 0; lx < CHUNK; ++lx)
+            carvePad[lx + 1][lz + 1] = carveLo[lz * CHUNK + lx];
+    auto caveFloorAt = [&](int wx, int wz) -> int {
+        ColGen g = col(wx, wz);
+        bool wet = g.ocean || g.lake;
+        bool entrance = !wet && (mixHash(wx, wz, 901) % 520) == 0;
+        int yTop = g.ground - 5;
+        if (entrance) yTop = g.ground;
+        if (wet) yTop = g.ground - 6;
+        if (yTop > HEIGHT - 2) yTop = HEIGHT - 2;
+        if (yTop < 8) return 255;
+        int lowest = 255;
+        for (int y = 6; y <= yTop; ++y) {
+            float n1 = valueNoise3((float)wx * 0.026f, (float)y * 0.062f, (float)wz * 0.026f, 301);
+            float n2 = valueNoise3((float)wx * 0.05f + 19.0f, (float)y * 0.09f, (float)wz * 0.05f, 877);
+            if (n1 < 0.66f || n2 < 0.60f) continue;
+            if (y >= g.ground - 1 && !entrance) continue;
+            if (y - 1 < lowest) lowest = y - 1;
+        }
+        return lowest;
+    };
+    for (int lz = -1; lz <= CHUNK; ++lz)
+        for (int lx = -1; lx <= CHUNK; ++lx) {
+            if (lx >= 0 && lz >= 0 && lx < CHUNK && lz < CHUNK) continue;
+            int lo = caveFloorAt(c->cx * CHUNK + lx, c->cz * CHUNK + lz);
+            if (lo < 255) carvePad[lx + 1][lz + 1] = (unsigned char)lo;
+        }
+    for (int lz = 0; lz < CHUNK; ++lz)
+        for (int lx = 0; lx < CHUNK; ++lx) {
+            int lo = 255;
+            for (int dz = 0; dz <= 2; ++dz)
+                for (int dx = 0; dx <= 2; ++dx) {
+                    int v = carvePad[lx + dx][lz + dz];
+                    if (v < lo) lo = v;
+                }
+            carveLo[lz * CHUNK + lx] = (unsigned char)lo;
+        }
+
+    for (int pass = 0; pass < 2; ++pass)
+        for (int lx = 0; lx < CHUNK; ++lx)
+            for (int lz = 0; lz < CHUNK; ++lz) {
+                int ground = colGround[lz * CHUNK + lx];
+                int yLim = ground - 3;
+                if (yLim > HEIGHT - 2) yLim = HEIGHT - 2;
+                for (int y = 2; y <= yLim; ++y) {
+                    int vi = cidx(lx, y, lz);
+                    Block cur = c->vol[vi];
+                    if (cur != Block::Stone && cur != Block::Dirt && cur != Block::Grass) continue;
+                    int support = 0;
+                    const int dir[6][3] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
+                    for (int d = 0; d < 6; ++d) {
+                        int nx = lx + dir[d][0], ny = y + dir[d][1], nz = lz + dir[d][2];
+                        if (nx < 0 || nz < 0 || nx >= CHUNK || nz >= CHUNK || ny < 0 || ny >= HEIGHT) {
+                            ++support;
+                            continue;
+                        }
+                        Block nb = c->vol[cidx(nx, ny, nz)];
+                        if (nb != Block::Air && nb != Block::Water) ++support;
+                    }
+                    if (support == 0) setVol(c, lx, y, lz, Block::Air);
                 }
             }
-        }
 
     auto wellFloor = [&](int lx, int y, int lz) -> bool {
         if (lx < 1 || lz < 1 || lx >= CHUNK - 1 || lz >= CHUNK - 1) return false;
@@ -638,13 +759,18 @@ static void generateChunk(Chunk* c) {
         }
 
     auto treeCandidate = [&](int x, int z, int& ground) -> bool {
-        unsigned h = mixHash(x, z, 44);
-        if ((int)(h % 1000) > 1000 / 22) return false;
         ColGen g = col(x, z);
         if (g.ocean || g.lake || g.beach || g.ground < SEA_LEVEL) return false;
-        int chance = g.forest ? 22 : (g.mountain ? 90 : 70);
-        if ((int)(h % 1000) > 1000 / chance) return false;
-        if ((h >> 8) % 7 == 0) return false;
+        ColGen gx = col(x + 1, z);
+        ColGen gz = col(x, z + 1);
+        int slope = std::abs(gx.ground - g.ground);
+        int sz = std::abs(gz.ground - g.ground);
+        if (sz > slope) slope = sz;
+        if (g.mountain && (slope >= 4 || g.ground > SEA_LEVEL + 34)) return false;
+        unsigned h = mixHash(x, z, 44);
+        int chance = g.forest ? 16 : (g.cover == 0 ? 110 : (g.mountain ? 48 : 36));
+        if ((int)(h % 1000) >= 1000 / chance) return false;
+        if ((h >> 8) % 5 == 0) return false;
         ground = g.ground;
         return true;
     };
@@ -668,10 +794,6 @@ static void generateChunk(Chunk* c) {
                     }
                 }
             if (crowded) continue;
-            if (lx >= 0 && lx < CHUNK && lz >= 0 && lz < CHUNK && ground >= 0 && ground < HEIGHT) {
-                Block floor = c->vol[cidx(lx, ground, lz)];
-                if (floor != Block::Grass && floor != Block::Dirt) continue;
-            }
             growTreeInto(c, wx, wz, ground);
         }
 
@@ -686,12 +808,24 @@ static void generateChunk(Chunk* c) {
             if (iTop < 0) continue;
             if (c->vol[cidx(lx, iTop, lz)] != Block::Grass) continue;
             if (c->vol[cidx(lx, iTop + 1, lz)] != Block::Air) continue;
+            ColGen g = col(wx, wz);
+            if (g.ocean || g.beach || g.lake || g.cover == 0) {
+                if ((mixHash(wx, wz, 5) % 18) != 0) continue;
+            }
             unsigned h = mixHash(wx + 19, wz + 3, 5);
             Block plant = Block::Air;
-            if (h % 3 == 0) plant = Block::TallGrass;
-            else if (h % 15 == 0) plant = Block::Poppy;
-            else if (h % 17 == 0) plant = Block::Triteleia;
-            else if (h % 21 == 0) plant = Block::TriteleiaRed;
+            if (g.cover >= 2) {
+                if (h % 2 == 0) plant = Block::TallGrass;
+                else if (h % 11 == 0) plant = Block::Poppy;
+                else if (h % 13 == 0) plant = Block::Triteleia;
+                else if (h % 17 == 0) plant = Block::TriteleiaRed;
+            }
+            else if (g.cover == 1) {
+                if (h % 4 == 0) plant = Block::TallGrass;
+                else if (h % 19 == 0) plant = Block::Poppy;
+                else if (h % 23 == 0) plant = Block::Triteleia;
+            }
+            else if (h % 18 == 0) plant = Block::TallGrass;
             if (plant != Block::Air)
                 setVol(c, lx, iTop + 1, lz, plant);
         }
@@ -718,6 +852,7 @@ static void generateChunk(Chunk* c) {
             }
             verticalColumn(c->cx * CHUNK + lx, c->cz * CHUNK + lz);
         }
+    spreadLight(c->cx * CHUNK, 0, c->cz * CHUNK, c->cx * CHUNK + CHUNK - 1, HEIGHT - 1, c->cz * CHUNK + CHUNK - 1);
 }
 
 static bool gMeshDirty = true;
@@ -796,13 +931,20 @@ void refreshWaterHeights() {
     markWaterMeshDirty();
 }
 
+static bool loadEditedChunk(Chunk* c);
+static void finishLoaded(Chunk* c);
+
 static Chunk* createChunk(int cx, int cz) {
     Chunk* c = new Chunk();
     c->cx = cx;
     c->cz = cz;
     gChunks[packChunk(cx, cz)] = c;
     gLoaded.push_back(c);
-    generateChunk(c);
+    if (loadEditedChunk(c)) {
+        c->edited = true;
+        finishLoaded(c);
+    }
+    else generateChunk(c);
     refreshChunkSurface(c);
     markMeshArea(cx * CHUNK, cz * CHUNK, cx * CHUNK + CHUNK - 1, cz * CHUNK + CHUNK - 1);
     markMeshArea((cx - 1) * CHUNK, cz * CHUNK, cx * CHUNK, (cz + 1) * CHUNK - 1);
@@ -984,6 +1126,117 @@ void worldFixSpawn(int& x, int& y, int& z) {
                 if (ok(x + dx, z + dz)) return;
             }
     }
+}
+
+static void rememberWater(int x, int y, int z);
+
+static char gSaveId[64] = "";
+static const int kVolN = CHUNK * CHUNK * HEIGHT;
+
+static void editPath(char* path, int cap, int cx, int cz) {
+    std::snprintf(path, cap, "worlds/%s/edits/%d_%d.bin", gSaveId, cx, cz);
+}
+
+void worldBindSave(const char* worldId) {
+    char copy[64];
+    copy[0] = 0;
+    if (worldId && worldId[0]) std::snprintf(copy, sizeof(copy), "%s", worldId);
+    std::snprintf(gSaveId, sizeof(gSaveId), "%s", copy);
+    if (!gSaveId[0]) return;
+    _mkdir("worlds");
+    char dir[180];
+    std::snprintf(dir, sizeof(dir), "worlds/%s", gSaveId);
+    _mkdir(dir);
+    std::snprintf(dir, sizeof(dir), "worlds/%s/edits", gSaveId);
+    _mkdir(dir);
+}
+
+static void finishLoaded(Chunk* c) {
+    for (int lx = 0; lx < CHUNK; ++lx)
+        for (int lz = 0; lz < CHUNK; ++lz) {
+            int i = lz * CHUNK + lx;
+            int top = -1;
+            for (int y = HEIGHT - 1; y >= 0; --y) {
+                if (c->vol[cidx(lx, y, lz)] != Block::Air) { top = y; break; }
+            }
+            if (top < 0) {
+                c->vis0[i] = 1;
+                c->vis1[i] = 0;
+            }
+            else {
+                c->vis0[i] = 0;
+                c->vis1[i] = (unsigned char)top;
+            }
+            int wx = c->cx * CHUNK + lx;
+            int wz = c->cz * CHUNK + lz;
+            verticalColumn(wx, wz);
+        }
+    spreadLight(c->cx * CHUNK, 0, c->cz * CHUNK, c->cx * CHUNK + CHUNK - 1, HEIGHT - 1, c->cz * CHUNK + CHUNK - 1);
+    for (int lx = 0; lx < CHUNK; ++lx)
+        for (int lz = 0; lz < CHUNK; ++lz) {
+            int wx = c->cx * CHUNK + lx;
+            int wz = c->cz * CHUNK + lz;
+            for (int y = 0; y < HEIGHT; ++y) {
+                int vi = cidx(lx, y, lz);
+                if (c->vol[vi] != Block::Water) continue;
+                if (c->src[vi] || (c->fill[vi] > 0 && c->fill[vi] < 255))
+                    rememberWater(wx, y, wz);
+            }
+        }
+}
+
+static bool loadEditedChunk(Chunk* c) {
+    if (!gSaveId[0]) return false;
+    char path[220];
+    editPath(path, (int)sizeof(path), c->cx, c->cz);
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "rb") != 0 || !f) return false;
+    char magic[4] = {};
+    int cx = 0, cz = 0;
+    bool ok = std::fread(magic, 1, 4, f) == 4
+        && magic[0] == 'T' && magic[1] == 'E' && magic[2] == 'C' && magic[3] == '1'
+        && std::fread(&cx, 4, 1, f) == 1
+        && std::fread(&cz, 4, 1, f) == 1
+        && cx == c->cx && cz == c->cz
+        && std::fread(c->vol, 1, kVolN, f) == (size_t)kVolN
+        && std::fread(c->meta, 1, kVolN, f) == (size_t)kVolN
+        && std::fread(c->src, 1, kVolN, f) == (size_t)kVolN
+        && std::fread(c->lvl, 1, kVolN, f) == (size_t)kVolN
+        && std::fread(c->fill, 1, kVolN, f) == (size_t)kVolN
+        && std::fread(c->sky, 1, kVolN, f) == (size_t)kVolN
+        && std::fread(c->lamp, 1, kVolN, f) == (size_t)kVolN;
+    std::fclose(f);
+    return ok;
+}
+
+static void saveChunkFile(Chunk* c) {
+    if (!c || !c->edited || !gSaveId[0]) return;
+    char path[220];
+    editPath(path, (int)sizeof(path), c->cx, c->cz);
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "wb") != 0 || !f) {
+        worldBindSave(gSaveId);
+        if (fopen_s(&f, path, "wb") != 0 || !f) return;
+    }
+    char magic[4] = { 'T', 'E', 'C', '1' };
+    std::fwrite(magic, 1, 4, f);
+    std::fwrite(&c->cx, 4, 1, f);
+    std::fwrite(&c->cz, 4, 1, f);
+    std::fwrite(c->vol, 1, kVolN, f);
+    std::fwrite(c->meta, 1, kVolN, f);
+    std::fwrite(c->src, 1, kVolN, f);
+    std::fwrite(c->lvl, 1, kVolN, f);
+    std::fwrite(c->fill, 1, kVolN, f);
+    std::fwrite(c->sky, 1, kVolN, f);
+    std::fwrite(c->lamp, 1, kVolN, f);
+    std::fflush(f);
+    std::fclose(f);
+}
+
+void worldSaveEdits() {
+    if (!gSaveId[0]) return;
+    for (size_t i = 0; i < gLoaded.size(); ++i)
+        saveChunkFile(gLoaded[i]);
 }
 
 static void rememberWater(int x, int y, int z) {
@@ -1274,14 +1527,12 @@ void tickWater(float dt) {
     refreshWaterHeights();
     if (changed) dirtyWaterAround(minX, minZ);
     if (!changed || minX > maxX) return;
-    for (int x = minX; x <= maxX; ++x)
-        for (int z = minZ; z <= maxZ; ++z)
+    int x0 = minX - 6, x1 = maxX + 6, z0 = minZ - 6, z1 = maxZ + 6;
+    for (int x = x0; x <= x1; ++x)
+        for (int z = z0; z <= z1; ++z)
             verticalColumn(x, z);
-    int y0 = minY - 4, y1 = maxY + 6;
-    if (y0 < 0) y0 = 0;
-    if (y1 >= HEIGHT) y1 = HEIGHT - 1;
-    floodBox(minX - 6, y0, minZ - 6, maxX + 6, y1, maxZ + 6, 8);
-    markMeshArea(minX - 16, minZ - 16, maxX + 16, maxZ + 16);
+    spreadLight(x0, 0, z0, x1, HEIGHT - 1, z1);
+    markMeshArea(x0, z0, x1, z1);
 }
 
 float waterSurfaceY(int x, int z) {
@@ -1405,9 +1656,10 @@ void setBlock(int x, int y, int z, Block value, int meta) {
             for (int oy = -1; oy <= 1; ++oy)
                 expandSpan(x + ox, z + oz, y + oy);
     relightRegion(x, y, z);
-    markMeshArea(x - 5, z - 5, x + 5, z + 5);
+    markMeshArea(x - kSkyRadius, z - kSkyRadius, x + kSkyRadius, z + kSkyRadius);
     if (!gReacting)
         resolveFluidContact(x, y, z);
+    saveChunkFile(c);
 }
 
 int waterLevelAt(int x, int y, int z) {
@@ -1458,15 +1710,15 @@ static float fieldLamp(int x, int y, int z) {
     return (float)refLamp(x, y, z) * (1.0f / 255.0f);
 }
 
-static float sampleField(bool sky, int bx, int by, int bz, float nx, float ny, float nz, bool skyOpen) {
+static float sampleField(bool sky, int bx, int by, int bz, float nx, float ny, float nz, bool) {
     int sx = bx + (nx > 0.0f ? 1 : (nx < 0.0f ? -1 : 0));
     int sy = by + (ny > 0.0f ? 1 : (ny < 0.0f ? -1 : 0));
     int sz = bz + (nz > 0.0f ? 1 : (nz < 0.0f ? -1 : 0));
     if (!inBounds(sx, sy, sz)) {
-        if (sky && (ny >= 0.0f || skyOpen)) return ny < 0.0f ? 0.62f : 1.0f;
+        if (sky && ny > 0.0f) return 1.0f;
         return 0.0f;
     }
-    if (solid(sx, sy, sz)) return sky ? 0.15f : 0.0f;
+    if (solid(sx, sy, sz)) return 0.0f;
     return sky ? fieldSky(sx, sy, sz) : fieldLamp(sx, sy, sz);
 }
 

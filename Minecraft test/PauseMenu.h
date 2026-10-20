@@ -30,4 +30,5 @@ void pauseMenuRender(int width, int height, const PauseMenuState& state);
 void titleBarRender(GLFWwindow* window, int width, int height, const PauseMenuState& state);
 void gameMenuTickLoading();
 bool gameMenuInWorld();
+void gameMenuSaveProgress();
 void gameMenuLeaveWorld();
