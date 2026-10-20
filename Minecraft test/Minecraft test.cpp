@@ -11,6 +11,7 @@
 #include "BlockSelection.h"
 #include "BlockShader.h"
 #include "Camera.h"
+#include "Clouds.h"
 #include "FluidSolver.h"
 #include "Lighting.h"
 #include "PauseMenu.h"
@@ -40,7 +41,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         return -1;
     }
     glfwMakeContextCurrent(window);
-    if (!initGlExtensions() || !initBlockShaders() || !initPostFX()) {
+    if (!initGlExtensions() || !initBlockShaders() || !initClouds() || !initPostFX()) {
         MessageBoxA(nullptr, "No se pudo iniciar OpenGL 3.3 (shaders).", "TerraEngine", MB_OK);
         glfwTerminate();
         return -1;
@@ -220,6 +221,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         if (inWorld) {
         bindOpaqueShader(light, time);
         renderOpaqueBlocks(renderRadiusXZ, renderMaxY);
+        renderClouds(light, time);
 
         blitSceneForWater();
         bindWaterInputs();

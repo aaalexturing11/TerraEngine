@@ -135,6 +135,7 @@
     <ClInclude Include="BlockSelection.h" />
     <ClInclude Include="BlockShader.h" />
     <ClInclude Include="Camera.h" />
+    <ClInclude Include="Clouds.h" />
     <ClInclude Include="Config.h" />
     <ClInclude Include="GlExt.h" />
     <ClInclude Include="GlIncludes.h" />
@@ -155,6 +156,7 @@
     <ClCompile Include="BlockSelection.cpp" />
     <ClCompile Include="BlockShader.cpp" />
     <ClCompile Include="Camera.cpp" />
+    <ClCompile Include="Clouds.cpp" />
     <ClCompile Include="FluidSolver.cpp" />
     <ClCompile Include="GlExt.cpp" />
     <ClCompile Include="Lighting.cpp" />
