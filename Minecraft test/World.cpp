@@ -775,10 +775,6 @@ static void refreshChunkSurface(Chunk* c) {
                 if (c->vol[cidx(lx, y, lz)] == Block::Water) { top = y; break; }
             }
             if (top < 0) continue;
-            bool grounded = top <= 0 || blockInfo(c->vol[cidx(lx, top - 1, lz)]).solid
-                || c->vol[cidx(lx, top - 1, lz)] == Block::Water;
-            if (top > 0 && !grounded && c->src[cidx(lx, top, lz)]) grounded = false;
-            if (!grounded) continue;
             float fill = c->src[cidx(lx, top, lz)] ? 1.0f : (float)c->fill[cidx(lx, top, lz)] * (1.0f / 255.0f);
             float h = (float)top + fill;
             if (top + 1 < HEIGHT && blockInfo(c->vol[cidx(lx, top + 1, lz)]).solid && h > (float)top + 0.97f)
@@ -798,36 +794,6 @@ void refreshWaterHeights() {
     }
     if (!any) return;
     markWaterMeshDirty();
-
-    const int dir[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
-    for (int iter = 0; iter < 2; ++iter) {
-        for (size_t ci = 0; ci < gLoaded.size(); ++ci) {
-            Chunk* c = gLoaded[ci];
-            for (int lx = 0; lx < CHUNK; ++lx)
-                for (int lz = 0; lz < CHUNK; ++lz) {
-                    int i = lz * CHUNK + lx;
-                    if (!c->mark[i]) { c->surfTmp[i] = 0.0f; continue; }
-                    float acc = c->surf[i];
-                    float n = 1.0f;
-                    for (int d = 0; d < 4; ++d) {
-                        int nx = c->cx * CHUNK + lx + dir[d][0];
-                        int nz = c->cz * CHUNK + lz + dir[d][1];
-                        if (!waterHasSurface(nx, nz)) continue;
-                        float nh = waterSurfaceY(nx, nz);
-                        float dh = nh - c->surf[i];
-                        if (dh < -1.15f || dh > 1.15f) continue;
-                        acc += nh;
-                        n += 1.0f;
-                    }
-                    c->surfTmp[i] = c->surf[i] * 0.40f + (acc / n) * 0.60f;
-                }
-        }
-        for (size_t ci = 0; ci < gLoaded.size(); ++ci) {
-            Chunk* c = gLoaded[ci];
-            for (int i = 0; i < CHUNK * CHUNK; ++i)
-                if (c->mark[i]) c->surf[i] = c->surfTmp[i];
-        }
-    }
 }
 
 static Chunk* createChunk(int cx, int cz) {

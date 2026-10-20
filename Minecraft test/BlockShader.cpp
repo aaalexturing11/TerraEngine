@@ -209,6 +209,13 @@ void main() {
     vec3 geo = normalize(vNormal);
     bool surface = geo.y > 0.45;
     if (!surface) {
+        if (geo.y < -0.45) {
+            vec3 view = normalize(uCam - vWorld);
+            float fres = pow(1.0 - abs(dot(geo, view)), 3.0);
+            vec3 col = mix(vec3(0.02, 0.16, 0.28), vec3(0.62, 0.86, 0.94), fres * 0.5);
+            fragColor = vec4(col, 0.8);
+            return;
+        }
         if (vFlow.z > 2.5) {
             vec2 uv = vec2(vAcross, vLip);
             float d = length(uv - 0.5) * 2.0;
@@ -226,8 +233,8 @@ void main() {
             float streak = smoothstep(0.0, 0.12, along) * smoothstep(0.62, 0.22, along);
             float edge = abs(vAcross * 2.0 - 1.0);
             col += vec3(0.12, 0.22, 0.24) * streak * 0.55;
-            float alpha = 0.34 * (1.0 - edge * 0.55) * (0.75 + streak * 0.35);
-            fragColor = vec4(col, clamp(alpha, 0.16, 0.48));
+            float alpha = 0.62 * (1.0 - edge * 0.28) * (0.82 + streak * 0.22);
+            fragColor = vec4(col, clamp(alpha, 0.4, 0.78));
             return;
         }
         fragColor = vec4(col, 0.62);

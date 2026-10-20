@@ -387,6 +387,107 @@ static bool waterPoint(float x, float z) {
     return false;
 }
 
+static float waterBodyBottom(int x, int z, float topH) {
+    int y = (int)std::floor(topH - 0.001f);
+    if (y >= HEIGHT) y = HEIGHT - 1;
+    if (y < 0) return 0.0f;
+    while (y > 0 && blockAt(x, y - 1, z) == Block::Water) --y;
+    return (float)y;
+}
+
+static void waterSideQuad(int x, int z, int dx, int dz, float y0, float y1, float kind) {
+    if (y1 <= y0 + 0.08f) return;
+    float x0, z0, x1, z1;
+    if (dx == 1) { x0 = (float)x + 1.0f; z0 = (float)z + 1.0f; x1 = x0; z1 = (float)z; }
+    else if (dx == -1) { x0 = (float)x; z0 = (float)z; x1 = x0; z1 = (float)z + 1.0f; }
+    else if (dz == 1) { x0 = (float)x; z0 = (float)z + 1.0f; x1 = (float)x + 1.0f; z1 = z0; }
+    else { x0 = (float)x + 1.0f; z0 = (float)z; x1 = (float)x; z1 = z0; }
+    drawWaterFace(x0, z0, x1, z1, y0, y1, (float)dx, (float)dz, kind, 1.0f, 0.0f);
+}
+
+static void emitExposedSides(int x, int z, int dx, int dz, float y0, float y1, float kind) {
+    if (y1 <= y0 + 0.08f) return;
+    int nx = x + dx, nz = z + dz;
+    bool hasN = waterHasSurface(nx, nz);
+    float nh = hasN ? waterSurfaceY(nx, nz) : 0.0f;
+    int a = (int)std::floor(y0);
+    int b = (int)std::floor(y1 - 0.001f);
+    if (a < 0) a = 0;
+    if (b >= HEIGHT) b = HEIGHT - 1;
+    float run0 = -1.0f;
+    auto flush = [&](float run1) {
+        if (run0 < 0.0f) return;
+        float lo = run0 < y0 ? y0 : run0;
+        float hi = run1 > y1 ? y1 : run1;
+        waterSideQuad(x, z, dx, dz, lo, hi, kind);
+        run0 = -1.0f;
+    };
+    for (int y = a; y <= b; ++y) {
+        if (y < 0 || solid(nx, y, nz)) { flush((float)y); continue; }
+        if (blockAt(nx, y, nz) == Block::Water && hasN && (float)(y + 1) <= nh + 0.02f) {
+            flush((float)y);
+            continue;
+        }
+        if (run0 < 0.0f) {
+            run0 = (float)y;
+            if (hasN && nh > run0 && nh < (float)(y + 1)) run0 = nh;
+        }
+    }
+    flush((float)(b + 1));
+}
+
+static float columnLanding(int x, int z, float fromY) {
+    int y = (int)std::floor(fromY - 0.02f);
+    if (y >= HEIGHT) y = HEIGHT - 1;
+    int limit = y - 48;
+    if (limit < -1) limit = -1;
+    for (; y > limit; --y) {
+        if (y < 0) return 0.0f;
+        if (solid(x, y, z)) return (float)(y + 1);
+        if (blockAt(x, y, z) == Block::Water) {
+            if (waterHasSurface(x, z)) {
+                float nh = waterSurfaceY(x, z);
+                if (nh < fromY) return nh;
+            }
+            return (float)(y + 1);
+        }
+    }
+    return (float)(limit + 1);
+}
+
+static void emitWaterVolume(int x, int z, float h) {
+    float bot = waterBodyBottom(x, z, h);
+    if (h < bot + 0.04f) return;
+    const int dir[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+    int below = (int)std::floor(bot - 0.02f);
+    bool openBelow = below < 0 || (!solid(x, below, z) && blockAt(x, below, z) != Block::Water);
+    if (openBelow && h > bot + 0.08f) {
+        float y = bot;
+        float x0 = (float)x, z0 = (float)z;
+        glm::vec3 n(0.0f, -1.0f, 0.0f);
+        pushWater(glm::vec3(x0, y, z0), n, 0, 0, 0, 1, 0, 0);
+        pushWater(glm::vec3(x0 + 1.0f, y, z0), n, 0, 0, 0, 1, 0, 0);
+        pushWater(glm::vec3(x0 + 1.0f, y, z0 + 1.0f), n, 0, 0, 0, 1, 0, 0);
+        pushWater(glm::vec3(x0, y, z0 + 1.0f), n, 0, 0, 0, 1, 0, 0);
+        float land = columnLanding(x, z, bot);
+        if (bot - land > 0.75f) {
+            for (int d = 0; d < 4; ++d)
+                emitExposedSides(x, z, dir[d][0], dir[d][1], land, bot, 1.0f);
+        }
+    }
+    for (int d = 0; d < 4; ++d) {
+        int nx = x + dir[d][0], nz = z + dir[d][1];
+        emitExposedSides(x, z, dir[d][0], dir[d][1], bot, h, 0.0f);
+        if (openBelow) continue;
+        int probe = (int)std::floor(bot - 0.02f);
+        if (probe < 0 || probe >= HEIGHT) continue;
+        if (solid(nx, probe, nz) || blockAt(nx, probe, nz) == Block::Water) continue;
+        float land = columnLanding(nx, nz, bot);
+        if (bot - land > 0.75f)
+            emitExposedSides(x, z, dir[d][0], dir[d][1], land, bot, 1.0f);
+    }
+}
+
 static float shoreFoam(float x, float z) {
     if (!waterHasSurface((int)std::floor(x - 0.12f), (int)std::floor(z))) return 1.0f;
     if (!waterHasSurface((int)std::floor(x + 0.12f), (int)std::floor(z))) return 1.0f;
@@ -627,6 +728,7 @@ static void buildChunk(int cx, int cz) {
             pushWater(glm::vec3(fx0, h, fz1), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
             pushWater(glm::vec3(fx1, h, fz1), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
             pushWater(glm::vec3(fx1, h, fz0), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
+            emitWaterVolume(x, z, h);
         }
     gCapWater = nullptr;
     auto uploadList = [](std::vector<MeshBatch>& list) {

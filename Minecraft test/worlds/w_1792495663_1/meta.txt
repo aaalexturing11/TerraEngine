@@ -1,5 +1,5 @@
 name=Nuevo mundo 2
 seed=4131949325
-sx=178
-sy=55
-sz=-172
+sx=171
+sy=56
+sz=-158
