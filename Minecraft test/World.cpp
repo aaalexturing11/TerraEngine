@@ -1,4 +1,5 @@
 #include "World.h"
+#include "FluidSolver.h"
 
 #include <algorithm>
 #include <cmath>
@@ -45,7 +46,9 @@ static float skyField[GRID][HEIGHT][GRID] = {};
 static float lampField[GRID][HEIGHT][GRID] = {};
 static bool waterSource[GRID][HEIGHT][GRID] = {};
 static unsigned char waterLevel[GRID][HEIGHT][GRID] = {};
+static unsigned char waterFill[GRID][HEIGHT][GRID] = {};
 static unsigned char gMeta[GRID][HEIGHT][GRID] = {};
+float waterHeightXZ[GRID * GRID] = {};
 
 struct WaterCell { int x, y, z; };
 static std::vector<WaterCell> waterCells;
@@ -274,6 +277,7 @@ static void eraseWater(int x, int y, int z) {
     blocks[x][y][z] = Block::Air;
     waterSource[x][y][z] = false;
     waterLevel[x][y][z] = 255;
+    waterFill[x][y][z] = 0;
     gMeta[x][y][z] = 0;
 }
 
@@ -299,9 +303,58 @@ static void putSource(int x, int y, int z) {
     blocks[x][y][z] = Block::Water;
     waterSource[x][y][z] = true;
     waterLevel[x][y][z] = 0;
+    waterFill[x][y][z] = 255;
     gMeta[x][y][z] = 0;
     rememberWater(x, y, z);
     resolveFluidContact(x, y, z);
+}
+
+static bool placeFlow(int x, int y, int z, int lv);
+static int addFillTo(int x, int y, int z, int amount, int lv, bool& changed);
+
+static int surfaceY(int x, int y, int z) {
+    while (y + 1 < HEIGHT && blocks[x][y + 1][z] == Block::Water) ++y;
+    return y;
+}
+
+static int receiveY(int x, int z, int fromY) {
+    if (!inBounds(x, fromY, z)) return -1;
+    Block b = blocks[x][fromY][z];
+    if (b == Block::Air || b == Block::Torch || isPlant(b)) return fromY;
+    if (b == Block::Water) {
+        int top = surfaceY(x, fromY, z);
+        if (top + 1 <= fromY && canEnterWater(x, top + 1, z)) return top + 1;
+    }
+    return -1;
+}
+
+static int addVolume(int x, int y, int z) {
+    if (!inBounds(x, y, z) || blocks[x][y][z] != Block::Water) return y;
+    int top = surfaceY(x, y, z);
+    int bestX = x, bestZ = z, bestY = HEIGHT;
+    const int dir[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+    for (int i = 0; i < 4; ++i) {
+        int ry = receiveY(x + dir[i][0], z + dir[i][1], top);
+        if (ry >= 0 && ry < bestY) {
+            bestY = ry;
+            bestX = x + dir[i][0];
+            bestZ = z + dir[i][1];
+        }
+    }
+    bool changed = false;
+    if (bestY <= top) {
+        addFillTo(bestX, bestY, bestZ, 48, 1, changed);
+        erasePlantsNear(bestX, bestY, bestZ);
+        return bestY;
+    }
+    int extra = addFillTo(x, top, z, 48, 1, changed);
+    if (extra > 0) return top;
+    if (top + 1 < HEIGHT && canEnterWater(x, top + 1, z)) {
+        addFillTo(x, top + 1, z, 48, 1, changed);
+        erasePlantsNear(x, top + 1, z);
+        return top + 1;
+    }
+    return top;
 }
 
 static bool placeFlow(int x, int y, int z, int lv) {
@@ -309,10 +362,38 @@ static bool placeFlow(int x, int y, int z, int lv) {
     blocks[x][y][z] = Block::Water;
     waterSource[x][y][z] = false;
     waterLevel[x][y][z] = (unsigned char)lv;
+    waterFill[x][y][z] = 24;
     gMeta[x][y][z] = 0;
     rememberWater(x, y, z);
     resolveFluidContact(x, y, z);
     return true;
+}
+
+static int fillOf(int x, int y, int z) {
+    if (!inBounds(x, y, z) || blocks[x][y][z] != Block::Water) return 0;
+    if (waterSource[x][y][z]) return 255;
+    return waterFill[x][y][z];
+}
+
+static int addFillTo(int x, int y, int z, int amount, int lv, bool& changed) {
+    if (amount <= 0 || !inBounds(x, y, z)) return 0;
+    if (blocks[x][y][z] != Block::Water) {
+        if (!canEnterWater(x, y, z)) return 0;
+        if (!placeFlow(x, y, z, lv)) return 0;
+        changed = true;
+    }
+    if (waterSource[x][y][z]) return 0;
+    int room = 255 - (int)waterFill[x][y][z];
+    if (room <= 0) return 0;
+    if (amount > room) amount = room;
+    waterFill[x][y][z] = (unsigned char)(waterFill[x][y][z] + amount);
+    return amount;
+}
+
+float waterFill01(int x, int y, int z) {
+    if (!inBounds(x, y, z) || blocks[x][y][z] != Block::Water) return 0.0f;
+    if (waterSource[x][y][z]) return 1.0f;
+    return waterFill[x][y][z] * (1.0f / 255.0f);
 }
 
 static bool waterSupported(int x, int y, int z) {
@@ -330,7 +411,7 @@ static bool waterSupported(int x, int y, int z) {
     return false;
 }
 
-static void stepWater(bool& changed, int& minX, int& minY, int& minZ, int& maxX, int& maxY, int& maxZ) {
+static void stepWater(bool& changed, int& minX, int& minY, int& minZ, int& maxX, int& maxY, int& maxZ, float dt) {
     auto touch = [&](int x, int y, int z) {
         changed = true;
         if (x < minX) minX = x;
@@ -341,76 +422,111 @@ static void stepWater(bool& changed, int& minX, int& minY, int& minZ, int& maxX,
         if (z > maxZ) maxZ = z;
     };
 
-    std::vector<WaterCell> snapshot = waterCells;
-    for (const WaterCell& c : snapshot) {
-        if (waterSupported(c.x, c.y, c.z)) continue;
-        if (blocks[c.x][c.y][c.z] != Block::Water || waterSource[c.x][c.y][c.z]) continue;
-        blocks[c.x][c.y][c.z] = Block::Air;
-        waterLevel[c.x][c.y][c.z] = 255;
-        touch(c.x, c.y, c.z);
-    }
+    int rateDown = (int)(720.0f * dt);
+    int rateSide = (int)(260.0f * dt);
+    int rateSrc = (int)(160.0f * dt);
+    if (rateDown < 1) rateDown = 1;
+    if (rateSide < 1) rateSide = 1;
+    if (rateSrc < 1) rateSrc = 1;
 
-    ++gFallPhase;
+    const int dir[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+    std::vector<WaterCell> snapshot = waterCells;
+
+    auto pourDown = [&](int x, int y, int z, int amount, int lv) {
+        if (y <= 0 || amount <= 0) return;
+        int dest = y - 1;
+        while (dest > 0 && canEnterWater(x, dest, z)) --dest;
+        int land = dest;
+        if (canEnterWater(x, dest, z)) land = dest;
+        else if (blockAt(x, dest, z) == Block::Water) {
+            land = surfaceY(x, dest, z);
+            if (fillOf(x, land, z) >= 255) {
+                if (land + 1 < HEIGHT && (canEnterWater(x, land + 1, z) || blockAt(x, land + 1, z) == Block::Water))
+                    land = land + 1;
+            }
+        }
+        else {
+            land = dest + 1;
+            if (land >= y) return;
+        }
+        int got = addFillTo(x, land, z, amount, lv < 7 ? lv + 1 : 7, changed);
+        if (got > 0) {
+            erasePlantsNear(x, land, z);
+            touch(x, land, z);
+            float fall = (float)(y - land);
+            if (fall < 1.0f) fall = 1.0f;
+            if (blockAt(x, land, z) == Block::Water && fillOf(x, land, z) > 40)
+                fluidImpact((float)x + 0.5f, (float)land + waterFill01(x, land, z), (float)z + 0.5f, std::sqrt(2.0f * 28.0f * fall), 12.0f + fall * 4.0f);
+            fluidStream((float)x + 0.5f, (float)y + 0.2f, (float)land + 0.9f, (float)z + 0.5f, (float)got / 80.0f);
+        }
+    };
+
     for (const WaterCell& c : snapshot) {
         if (!inBounds(c.x, c.y, c.z) || blocks[c.x][c.y][c.z] != Block::Water) continue;
         if (erasePlantsNear(c.x, c.y, c.z))
             touch(c.x, c.y, c.z);
-        if (!waterSource[c.x][c.y][c.z] && !waterSupported(c.x, c.y, c.z)) continue;
         bool source = waterSource[c.x][c.y][c.z];
         int lv = source ? 0 : (int)waterLevel[c.x][c.y][c.z];
+        int have = fillOf(c.x, c.y, c.z);
+
         bool openBelow = c.y > 0 && canEnterWater(c.x, c.y - 1, c.z);
-        if (openBelow) {
-            int period = 1;
-            int speed = 1;
-            bool keepLip = true;
-            if (lv <= 1) { speed = 2; period = 1; keepLip = true; }
-            else if (lv <= 3) { speed = 1; period = 1; keepLip = true; }
-            else if (lv <= 5) { speed = 1; period = 2; keepLip = false; }
-            else { speed = 1; period = 3; keepLip = false; }
-            if ((gFallPhase % period) != 0) continue;
-            if (source) {
-                int dest = c.y;
-                for (int s = 0; s < speed; ++s) {
-                    if (dest <= 0 || !canEnterWater(c.x, dest - 1, c.z)) break;
-                    --dest;
-                }
-                if (dest != c.y) {
-                    eraseWater(c.x, c.y, c.z);
-                    putSource(c.x, dest, c.z);
-                    erasePlantsNear(c.x, dest, c.z);
-                    touch(c.x, c.y, c.z);
-                    touch(c.x, dest, c.z);
-                }
-            }
-            else {
-                int y = c.y;
-                int dropped = 0;
-                int fallLevel = lv < 1 ? 0 : lv;
-                for (int s = 0; s < speed; ++s) {
-                    if (y <= 0 || !canEnterWater(c.x, y - 1, c.z)) break;
-                    if (!placeFlow(c.x, y - 1, c.z, fallLevel)) break;
-                    erasePlantsNear(c.x, y - 1, c.z);
-                    --y;
-                    ++dropped;
-                    touch(c.x, y, c.z);
-                }
-                if (dropped > 0 && !keepLip) {
+        bool waterBelow = c.y > 0 && blocks[c.x][c.y - 1][c.z] == Block::Water && fillOf(c.x, c.y - 1, c.z) < 255;
+
+        if (openBelow || waterBelow) {
+            int give = source ? rateSrc : (have < rateDown ? have : rateDown);
+            if (!source && give > 0) {
+                waterFill[c.x][c.y][c.z] = (unsigned char)(have - give);
+                if (waterFill[c.x][c.y][c.z] == 0) {
                     eraseWater(c.x, c.y, c.z);
                     touch(c.x, c.y, c.z);
                 }
             }
+            pourDown(c.x, c.y, c.z, give, lv);
             continue;
         }
-        bool blockedBelow = (c.y == 0) || solid(c.x, c.y - 1, c.z);
-        if ((blockedBelow || source) && lv < 7) {
-            const int dir[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
-            for (int i = 0; i < 4; ++i) {
-                int nx = c.x + dir[i][0];
-                int nz = c.z + dir[i][1];
-                if (placeFlow(nx, c.y, nz, lv + 1)) {
-                    erasePlantsNear(nx, c.y, nz);
-                    touch(nx, c.y, nz);
+
+        if (have < 8 && !source) continue;
+
+        int bestX = -1, bestZ = -1, bestFill = 256;
+        for (int i = 0; i < 4; ++i) {
+            int nx = c.x + dir[i][0], nz = c.z + dir[i][1];
+            if (!inBounds(nx, c.y, nz)) continue;
+            Block nb = blocks[nx][c.y][nz];
+            if (nb != Block::Water && !canEnterWater(nx, c.y, nz)) continue;
+            int nf = fillOf(nx, c.y, nz);
+            if (nb == Block::Air || nb == Block::Torch || isPlant(nb)) nf = 0;
+            if (have - nf < 12) continue;
+            if (nf < bestFill) {
+                bestFill = nf;
+                bestX = nx;
+                bestZ = nz;
+            }
+        }
+        if (bestX >= 0) {
+            int give = source ? rateSrc : ((have - bestFill) / 3);
+            if (give > rateSide) give = rateSide;
+            if (give < 1) give = 1;
+            if (!source) {
+                if (give > have - 4) give = have - 4;
+                if (give > 0) {
+                    waterFill[c.x][c.y][c.z] = (unsigned char)(have - give);
+                    have -= give;
                 }
+            }
+            if (give > 0) {
+                addFillTo(bestX, c.y, bestZ, give, lv < 7 ? lv + 1 : 7, changed);
+                erasePlantsNear(bestX, c.y, bestZ);
+                touch(bestX, c.y, bestZ);
+            }
+        }
+        else if (have >= 250 && c.y + 1 < HEIGHT && (canEnterWater(c.x, c.y + 1, c.z) || blockAt(c.x, c.y + 1, c.z) == Block::Water)) {
+            int give = source ? rateSrc : rateSide;
+            if (!source && give > have - 200) give = have - 200;
+            if (give > 0) {
+                if (!source) waterFill[c.x][c.y][c.z] = (unsigned char)(have - give);
+                addFillTo(c.x, c.y + 1, c.z, give, lv, changed);
+                erasePlantsNear(c.x, c.y + 1, c.z);
+                touch(c.x, c.y + 1, c.z);
             }
         }
     }
@@ -424,17 +540,40 @@ static void stepWater(bool& changed, int& minX, int& minY, int& minZ, int& maxX,
     waterCells.resize(w);
 }
 
+void waterImpact(int x, int y, int z, float vy, float mass) {
+    if (!inBounds(x, y, z)) return;
+    int sy = y;
+    if (blocks[x][y][z] != Block::Water) {
+        for (int i = 1; i <= 3; ++i) {
+            if (inBounds(x, y - i, z) && blocks[x][y - i][z] == Block::Water) {
+                sy = y - i;
+                break;
+            }
+        }
+    }
+    if (blocks[x][sy][z] != Block::Water) return;
+    sy = surfaceY(x, sy, z);
+    float speed = vy < 0.0f ? -vy : vy;
+    if (mass > 40.0f && speed > 12.0f)
+        addVolume(x, sy, z);
+    fluidImpact((float)x + 0.5f, (float)sy + 0.95f, (float)z + 0.5f, speed, mass);
+    relightRegion(x, sy, z);
+    markMeshArea(x - 6, z - 6, x + 6, z + 6);
+}
+
 void tickWater(float dt) {
     if (dt < 0.0f) dt = 0.0f;
     if (dt > 0.05f) dt = 0.05f;
-    waterClock += dt;
-    if (waterClock < 0.16f || waterCells.empty()) return;
-    waterClock = 0.0f;
+    if (waterCells.empty()) {
+        refreshWaterHeights();
+        return;
+    }
 
     bool changed = false;
     int minX = GRID, minY = HEIGHT, minZ = GRID;
     int maxX = 0, maxY = 0, maxZ = 0;
-    stepWater(changed, minX, minY, minZ, maxX, maxY, maxZ);
+    stepWater(changed, minX, minY, minZ, maxX, maxY, maxZ, dt);
+    refreshWaterHeights();
     if (!changed || minX > maxX || minY > maxY || minZ > maxZ) return;
 
     for (int x = minX; x <= maxX; ++x)
@@ -442,6 +581,30 @@ void tickWater(float dt) {
             verticalColumn(x, z);
     floodBox(minX - 6, std::max(0, minY - 4), minZ - 6, maxX + 6, std::min(HEIGHT - 1, maxY + 6), maxZ + 6, 12);
     markMeshArea(minX - 16, minZ - 16, maxX + 16, maxZ + 16);
+}
+
+void refreshWaterHeights() {
+    for (int i = 0; i < GRID * GRID; ++i) waterHeightXZ[i] = 0.0f;
+    for (const WaterCell& c : waterCells) {
+        if (!inBounds(c.x, c.y, c.z) || blocks[c.x][c.y][c.z] != Block::Water) continue;
+        float h = (float)c.y + waterFill01(c.x, c.y, c.z);
+        int i = c.z * GRID + c.x;
+        if (h > waterHeightXZ[i]) waterHeightXZ[i] = h;
+    }
+}
+
+float waterSurfaceY(int x, int z) {
+    if (x < 0 || z < 0 || x >= GRID || z >= GRID) return 0.0f;
+    return waterHeightXZ[z * GRID + x];
+}
+
+int waterCellCount() { return (int)waterCells.size(); }
+
+void getWaterCell(int i, int& x, int& y, int& z) {
+    if (i < 0 || i >= (int)waterCells.size()) { x = y = z = 0; return; }
+    x = waterCells[i].x;
+    y = waterCells[i].y;
+    z = waterCells[i].z;
 }
 
 int blockMeta(int x, int y, int z) {
@@ -473,6 +636,7 @@ void setBlock(int x, int y, int z, Block value, int meta) {
     if (value == Block::Water) {
         waterSource[x][y][z] = true;
         waterLevel[x][y][z] = 0;
+        waterFill[x][y][z] = 255;
         rememberWater(x, y, z);
         erasePlantsNear(x, y, z);
     }

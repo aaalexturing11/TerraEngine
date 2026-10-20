@@ -55,6 +55,13 @@ float sampleLampForFace(int bx, int by, int bz, float nx, float ny, float nz);
 float causticAmount(int x, int y, int z);
 
 void tickWater(float dt);
+void waterImpact(int x, int y, int z, float vy, float mass);
 
 int waterLevelAt(int x, int y, int z);
+float waterFill01(int x, int y, int z);
+float waterSurfaceY(int x, int z);
+void refreshWaterHeights();
+extern float waterHeightXZ[GRID * GRID];
+int waterCellCount();
+void getWaterCell(int i, int& x, int& y, int& z);
 void waterFlow(int x, int y, int z, float& fx, float& fz, float& down);

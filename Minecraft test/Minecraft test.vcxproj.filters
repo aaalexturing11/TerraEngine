@@ -80,6 +80,9 @@
     <ClCompile Include="Camera.cpp">
       <Filter>Game</Filter>
     </ClCompile>
+    <ClCompile Include="FluidSolver.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
     <ClCompile Include="BlockSelection.cpp">
       <Filter>Game</Filter>
     </ClCompile>

@@ -2,6 +2,7 @@
 #include "GlExt.h"
 #include "Renderer.h"
 #include "Camera.h"
+#include "FluidSolver.h"
 #include "World.h"
 #include <algorithm>
 #include <cmath>
@@ -271,9 +272,12 @@ static WaterCorner sampleCorner(int cx, int cz, int y) {
             }
             float ffx, ffz, fd;
             waterFlow(wx, y, wz, ffx, ffz, fd);
+            Block under = blockAt(wx, y - 1, wz);
+            bool lip = under == Block::Air || under == Block::Torch || isPlant(under);
             bool falling = fd > 0.5f || waterLevelAt(wx, y + 1, wz) >= 0;
-            float top = y + 0.9f - lv * 0.09f;
-            if (falling) {
+            float top = (float)y + waterFill01(wx, y, wz);
+            if (top < (float)y + 0.04f) top = (float)y + 0.04f;
+            if (!lip && falling) {
                 top = y + 1.0f;
                 column = true;
             }
@@ -299,43 +303,59 @@ static WaterCorner sampleCorner(int cx, int cz, int y) {
     return c;
 }
 
-static void pushWater(const glm::vec3& p, const glm::vec3& n, float fx, float fz, float down, float strength, float across) {
+static void pushWater(const glm::vec3& p, const glm::vec3& n, float fx, float fz, float kind, float strength, float across, float lipY) {
     if (gCapWater) {
-        pushMesh(0, p, n, 1, 1, 1, 1, fx, fz, down, strength, across, 0, 0, 0, 0, 0, 0, 0);
+        pushMesh(0, p, n, 1, 1, 1, 1, fx, fz, kind, strength, across, lipY, 0, 0, 0, 0, 0, 0);
         return;
     }
     glNormal3f(n.x, n.y, n.z);
-    glTexCoord4f(fx, fz, down, strength);
-    glx.MultiTexCoord4f(GL_TEXTURE1, across, 0, 0, 0);
+    glTexCoord4f(fx, fz, kind, strength);
+    glx.MultiTexCoord4f(GL_TEXTURE1, across, lipY, 0, 0);
     glVertex3f(p.x, p.y, p.z);
+}
+
+static bool cellOpen(int x, int y, int z) {
+    Block b = blockAt(x, y, z);
+    return b == Block::Air || b == Block::Torch || isPlant(b);
+}
+
+static void drawWaterFace(float x0, float z0, float x1, float z1, float y0, float y1,
+    float fx, float fz, float kind, float strength, float lipY) {
+    glm::vec3 edge(x1 - x0, 0.0f, z1 - z0);
+    glm::vec3 n = glm::cross(edge, glm::vec3(0, 1, 0));
+    float len = glm::length(n);
+    if (len < 0.0001f) n = glm::vec3(1, 0, 0);
+    else n /= len;
+    pushWater(glm::vec3(x0, y0, z0), n, fx, fz, kind, strength, 0, lipY);
+    pushWater(glm::vec3(x1, y0, z1), n, fx, fz, kind, strength, 1, lipY);
+    pushWater(glm::vec3(x1, y1, z1), n, fx, fz, kind, strength, 1, lipY);
+    pushWater(glm::vec3(x0, y1, z0), n, fx, fz, kind, strength, 0, lipY);
 }
 
 static void drawWater(int bx, int by, int bz) {
     float fx, fz, down;
     waterFlow(bx, by, bz, fx, fz, down);
-    bool feedAbove = waterLevelAt(bx, by + 1, bz) >= 0;
-    bool fallsHere = false;
-    for (int y = by; y > 0 && waterLevelAt(bx, y, bz) >= 0 && (by - y) < 16; --y) {
-        Block under = blockAt(bx, y - 1, bz);
-        if (under == Block::Air || under == Block::Torch || isPlant(under)) {
-            fallsHere = true;
-            break;
-        }
-        if (under != Block::Water) break;
-    }
-    bool middle = feedAbove && fallsHere;
+    bool top = waterLevelAt(bx, by + 1, bz) < 0;
+    int lv = waterLevelAt(bx, by, bz);
+    if (lv < 0) lv = 0;
+    float fill = waterFill01(bx, by, bz);
+    float strength = fill;
+    if (strength < 0.18f) strength = 0.18f;
 
-    if (!middle) {
+    float surfaceY = (float)by + fill;
+    bool lip = by > 0 && cellOpen(bx, by - 1, bz);
+    if (top && !lip) {
         WaterCorner c00 = sampleCorner(bx, bz, by);
         WaterCorner c10 = sampleCorner(bx + 1, bz, by);
         WaterCorner c11 = sampleCorner(bx + 1, bz + 1, by);
         WaterCorner c01 = sampleCorner(bx, bz + 1, by);
+        surfaceY = (c00.h + c10.h + c11.h + c01.h) * 0.25f;
         if (!gCapWater) {
             glBegin(GL_QUADS);
             glNormal3f(0, 1, 0);
         }
         auto vert = [&](const WaterCorner& c, float x, float z) {
-            pushWater(glm::vec3(x, c.h, z), glm::vec3(0, 1, 0), c.fx, c.fz, c.down, 0, 0);
+            pushWater(glm::vec3(x, c.h, z), glm::vec3(0, 1, 0), c.fx, c.fz, c.down, 0, 0, 0);
         };
         vert(c00, (float)bx, (float)bz);
         vert(c01, (float)bx, (float)bz + 1);
@@ -343,28 +363,44 @@ static void drawWater(int bx, int by, int bz) {
         vert(c10, (float)bx + 1, (float)bz);
         if (!gCapWater) glEnd();
     }
-
-    if (!fallsHere) return;
-
-    int lv = waterLevelAt(bx, by, bz);
-    if (lv < 0) lv = 0;
-    float strength = 1.0f - (float)lv / 7.0f;
-    if (strength < 0.14f) strength = 0.14f;
-    float half = 0.06f + 0.22f * strength;
-    float cx = bx + 0.5f + fx * 0.18f;
-    float cz = bz + 0.5f + fz * 0.18f;
-    float yb = (float)by;
-    float yt = (float)by + 1.0f;
     if (!gCapWater) glBegin(GL_QUADS);
-    auto ribbon = [&](float x0, float z0, float x1, float z1) {
-        glm::vec3 n = glm::normalize(glm::cross(glm::vec3(x1 - x0, 0, z1 - z0), glm::vec3(0, 1, 0)));
-        pushWater(glm::vec3(x0, yb, z0), n, fx, fz, 1, strength, 0);
-        pushWater(glm::vec3(x1, yb, z1), n, fx, fz, 1, strength, 1);
-        pushWater(glm::vec3(x1, yt, z1), n, fx, fz, 1, strength, 1);
-        pushWater(glm::vec3(x0, yt, z0), n, fx, fz, 1, strength, 0);
-    };
-    ribbon(cx - half, cz - half, cx + half, cz + half);
-    ribbon(cx - half, cz + half, cx + half, cz - half);
+    if (lip) {
+        int y = by - 1;
+        while (y > 0 && cellOpen(bx, y, bz)) --y;
+        float yBot = (blockAt(bx, y, bz) == Block::Water) ? (float)y + 0.96f : (float)(y + 1);
+        float yTop = surfaceY;
+        if (yTop < (float)by + 0.35f) yTop = (float)by + 0.35f;
+        if (yTop - yBot > 0.2f) {
+            float flen = std::sqrt(fx * fx + fz * fz);
+            glm::vec2 fwd = flen > 0.2f ? glm::vec2(fx / flen, fz / flen) : glm::vec2(0.0f, 1.0f);
+            glm::vec2 side(-fwd.y, fwd.x);
+            float hw = 0.16f + 0.30f * strength;
+            float hd = 0.05f + 0.10f * strength;
+            float cx = bx + 0.5f + fwd.x * 0.22f;
+            float cz = bz + 0.5f + fwd.y * 0.22f;
+            glm::vec2 corner[4] = {
+                glm::vec2(cx, cz) + fwd * hd + side * hw,
+                glm::vec2(cx, cz) - fwd * hd + side * hw,
+                glm::vec2(cx, cz) - fwd * hd - side * hw,
+                glm::vec2(cx, cz) + fwd * hd - side * hw
+            };
+            for (int i = 0; i < 4; ++i) {
+                glm::vec2 a = corner[i];
+                glm::vec2 b = corner[(i + 1) & 3];
+                drawWaterFace(a.x, a.y, b.x, b.y, yBot, yTop, fx, fz, 1.0f, strength, yTop);
+            }
+        }
+    }
+    else {
+        float y1 = top ? surfaceY : (float)by + 1.0f;
+        float y0 = (float)by;
+        float xA = (float)bx + 0.04f, xB = (float)bx + 0.96f;
+        float zA = (float)bz + 0.04f, zB = (float)bz + 0.96f;
+        if (cellOpen(bx + 1, by, bz)) drawWaterFace(xB, zA, xB, zB, y0, y1, fx, fz, 2.0f, strength, 0);
+        if (cellOpen(bx - 1, by, bz)) drawWaterFace(xA, zB, xA, zA, y0, y1, fx, fz, 2.0f, strength, 0);
+        if (cellOpen(bx, by, bz + 1)) drawWaterFace(xB, zB, xA, zB, y0, y1, fx, fz, 2.0f, strength, 0);
+        if (cellOpen(bx, by, bz - 1)) drawWaterFace(xA, zA, xB, zA, y0, y1, fx, fz, 2.0f, strength, 0);
+    }
     if (!gCapWater) glEnd();
 }
 
@@ -516,11 +552,6 @@ static void buildChunk(int cx, int cz) {
                 else if (isPlant(b)) drawPlant(x, y, z);
             }
     gCap = nullptr;
-    gCapWater = &chunk.water;
-    for (int x = x0; x <= x1; ++x)
-        for (int z = z0; z <= z1; ++z)
-            for (int y = 0; y <= kMeshY && y < HEIGHT; ++y)
-                if (blocks[x][y][z] == Block::Water) drawWater(x, y, z);
     gCapWater = nullptr;
 }
 
@@ -644,9 +675,16 @@ void renderWaterBlocks(int renderRadiusXZ, int) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_TRUE);
-    for (int cx = 0; cx < kChunkCount; ++cx)
-        for (int cz = 0; cz < kChunkCount; ++cz)
-            if (chunkVisible(cx, cz, renderRadiusXZ))
-                drawWaterMesh(gChunks[cx][cz].water);
+    gCapWater = nullptr;
+    int n = waterCellCount();
+    for (int i = 0; i < n; ++i) {
+        int x, y, z;
+        getWaterCell(i, x, y, z);
+        int cx = x / kChunk, cz = z / kChunk;
+        if (cx < 0 || cz < 0 || cx >= kChunkCount || cz >= kChunkCount) continue;
+        if (!chunkVisible(cx, cz, renderRadiusXZ)) continue;
+        drawWater(x, y, z);
+    }
+    fluidDraw();
     glDisable(GL_BLEND);
 }

@@ -11,6 +11,7 @@
 #include "BlockSelection.h"
 #include "BlockShader.h"
 #include "Camera.h"
+#include "FluidSolver.h"
 #include "Lighting.h"
 #include "PauseMenu.h"
 #include "PostFX.h"
@@ -154,6 +155,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         if (!uiOpen) {
             updateSelectedBlock(window);
             tickWater((float)(frameStart - lastFrameTime));
+        fluidTick((float)(frameStart - lastFrameTime));
         }
         lastFrameTime = frameStart;
 

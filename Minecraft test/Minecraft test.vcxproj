@@ -150,6 +150,7 @@
     <ClCompile Include="BlockSelection.cpp" />
     <ClCompile Include="BlockShader.cpp" />
     <ClCompile Include="Camera.cpp" />
+    <ClCompile Include="FluidSolver.cpp" />
     <ClCompile Include="GlExt.cpp" />
     <ClCompile Include="Lighting.cpp" />
     <ClCompile Include="Minecraft test.cpp" />

@@ -1,5 +1,6 @@
 #include "BlockShader.h"
 #include "GlExt.h"
+#include "FluidSolver.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -127,16 +128,29 @@ out vec3 vWorld;
 out vec3 vNormal;
 out vec4 vFlow;
 out float vAcross;
+out float vLip;
 uniform float uTime;
+uniform sampler2D uRipple;
+uniform sampler2D uHeight;
+uniform float uWorld;
 void main() {
     vec3 p = gl_Vertex.xyz;
     vFlow = gl_MultiTexCoord0;
     vAcross = gl_MultiTexCoord1.x;
+    vLip = gl_MultiTexCoord1.y;
     vNormal = gl_Normal;
     float wave = sin(p.x * 1.55 + uTime * 1.2) * 0.012;
     wave += cos(p.z * 1.28 - uTime * 0.85) * 0.01;
     wave += sin((p.x + p.z) * 0.62 + uTime * 0.55) * 0.008;
-    if (gl_Normal.y > 0.5) p.y += wave;
+    if (gl_Normal.y > 0.5) {
+        float surface = textureLod(uHeight, p.xz / uWorld, 0.0).r;
+        if (surface > 0.01) p.y = surface;
+        p.y += wave + textureLod(uRipple, p.xz / uWorld, 0.0).r * 0.09;
+    }
+    else if (vFlow.z < 1.5 && vLip > 1.0) {
+        float h = max(vLip - p.y, 0.0);
+        p += gl_Normal * sin(p.y * 5.5 - uTime * 3.2) * 0.018 * sqrt(h + 0.05);
+    }
     vWorld = p;
     gl_Position = gl_ModelViewProjectionMatrix * vec4(p, 1.0);
 }
@@ -148,6 +162,7 @@ in vec3 vWorld;
 in vec3 vNormal;
 in vec4 vFlow;
 in float vAcross;
+in float vLip;
 out vec4 fragColor;
 uniform vec3 uCam;
 uniform vec3 uSky;
@@ -157,6 +172,8 @@ uniform float uTime;
 uniform mat4 uViewProj;
 uniform sampler2D uScene;
 uniform sampler2D uDepth;
+uniform sampler2D uRipple;
+uniform float uWorld;
 
 float linearDepth(float d) {
     float z = d * 2.0 - 1.0;
@@ -167,19 +184,41 @@ void main() {
     vec3 geo = normalize(vNormal);
     bool surface = geo.y > 0.45;
     if (!surface) {
+        if (vFlow.z > 2.5) {
+            vec2 uv = vec2(vAcross, vLip);
+            float d = length(uv - 0.5) * 2.0;
+            if (d > 1.0) discard;
+            float rim = smoothstep(1.0, 0.35, d);
+            vec3 col = mix(vec3(0.08, 0.38, 0.55), vec3(0.88, 0.96, 1.0), rim);
+            fragColor = vec4(col, 0.86 * rim * clamp(vFlow.w, 0.2, 1.0));
+            return;
+        }
+        vec3 view = normalize(uCam - vWorld);
+        float fres = pow(1.0 - abs(dot(geo, view)), 3.0);
+        if (vFlow.z > 1.5) {
+            vec3 col = mix(vec3(0.03, 0.32, 0.46), uSky * vec3(0.72, 0.88, 1.0), fres * 0.55);
+            fragColor = vec4(col, 0.58);
+            return;
+        }
         float stream = clamp(vFlow.w, 0.0, 1.0);
-        float speed = mix(0.85, 3.6, stream);
-        float along = fract(-vWorld.y * 2.8 - uTime * speed);
-        float drop = smoothstep(0.0, 0.05, along) * smoothstep(0.40, 0.12, along);
-        float core = smoothstep(0.18, 0.72, stream);
-        float band = max(core, drop);
+        float h = max(vLip - vWorld.y, 0.0);
+        float speed = sqrt(h * 2.6 + 0.2);
+        float along = fract(sqrt(h + 0.08) * 5.0 - uTime * (0.7 + speed));
+        float breakup = smoothstep(0.2, 3.4, h);
+        breakup = mix(breakup * 0.35, breakup, 1.0 - stream * 0.45);
+        float dropLen = mix(0.7, 0.14, breakup);
+        float drop = smoothstep(0.0, 0.03, along) * smoothstep(dropLen, dropLen * 0.32, along);
+        float satellite = fract(along + 0.46);
+        satellite = smoothstep(0.0, 0.02, satellite) * smoothstep(0.11, 0.03, satellite) * breakup;
+        float core = (1.0 - breakup) * mix(0.3, 1.0, stream);
         float across = abs(vAcross * 2.0 - 1.0);
-        float bulge = mix(0.28, 1.0, max(core * 0.85, drop));
-        if (band < 0.05 || across > bulge) discard;
-        float shine = pow(drop, 1.4);
-        vec3 col = mix(vec3(0.03, 0.25, 0.40), vec3(0.72, 0.92, 0.98), shine);
-        col = mix(col, vec3(0.10, 0.45, 0.62), core * (1.0 - shine));
-        float alpha = mix(0.28, 0.78, max(core, drop));
+        float halfW = mix(0.5, 0.98, stream) * mix(1.0, 0.38, breakup);
+        float bulge = mix(0.7, 1.08, max(drop, satellite));
+        if (across > halfW * bulge) discard;
+        if (core < 0.05 && drop < 0.05 && satellite < 0.05) discard;
+        vec3 body = mix(vec3(0.02, 0.28, 0.42), vec3(0.70, 0.92, 0.98), max(drop, satellite));
+        vec3 col = mix(body, uSky * vec3(0.75, 0.9, 1.0), fres * 0.72);
+        float alpha = mix(0.18, 0.82, max(core, max(drop, satellite)));
         fragColor = vec4(col, alpha);
         return;
     }
@@ -188,6 +227,13 @@ void main() {
         sin(vWorld.x * 1.55 + uTime * 1.2) * 0.045 + vFlow.x * 0.04,
         1.0,
         cos(vWorld.z * 1.28 - uTime * 0.85) * 0.045 + vFlow.y * 0.04));
+    {
+        vec2 ruv = vWorld.xz / uWorld;
+        float e = 1.0 / (uWorld * 4.0);
+        float hx = texture(uRipple, ruv + vec2(e, 0)).r - texture(uRipple, ruv - vec2(e, 0)).r;
+        float hz = texture(uRipple, ruv + vec2(0, e)).r - texture(uRipple, ruv - vec2(0, e)).r;
+        n = normalize(n + vec3(-hx, 0.0, -hz) * 2.2);
+    }
     vec3 view = normalize(uCam - vWorld);
     vec2 uv = gl_FragCoord.xy / vec2(textureSize(uScene, 0));
     vec2 refr = clamp(uv + n.xz * 0.015, vec2(0.001), vec2(0.999));
@@ -333,6 +379,11 @@ void bindWaterShader(const glm::mat4& viewProj, const glm::vec3& camPos, const g
     glx.UniformMatrix4fv(loc("uViewProj"), 1, GL_FALSE, glm::value_ptr(viewProj));
     glx.Uniform1i(loc("uScene"), 2);
     glx.Uniform1i(loc("uDepth"), 3);
+    glx.Uniform1i(loc("uRipple"), 5);
+    glx.Uniform1i(loc("uHeight"), 4);
+    glx.Uniform1f(loc("uWorld"), fluidRippleWorldSize());
+    fluidBindHeight(4);
+    fluidBindRipple(5);
 }
 
 void bindFixedPipeline() {
