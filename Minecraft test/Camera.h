@@ -11,9 +11,11 @@ void cameraResetMouse();
 void cameraOnMouseMove(GLFWwindow* window, double xpos, double ypos);
 void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt);
 void cameraSpawnOnGround();
+void cameraSetSpawn(int x, int y, int z);
 void cameraSetLookEnabled(bool enabled);
 
 glm::vec3 cameraPosition();
 glm::vec3 cameraLookDirection();
+glm::vec3 cameraVelocity();
 glm::vec3 cameraBobOffset();
 float cameraFov();

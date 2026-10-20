@@ -29,10 +29,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(800, 800, "Runes & Ruins", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(800, 800, "TerraEngine", NULL, NULL);
     if (!window) {
         glfwDefaultWindowHints();
-        window = glfwCreateWindow(800, 800, "Runes & Ruins", NULL, NULL);
+        window = glfwCreateWindow(800, 800, "TerraEngine", NULL, NULL);
     }
     if (!window) {
         glfwTerminate();
@@ -40,7 +40,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     }
     glfwMakeContextCurrent(window);
     if (!initGlExtensions() || !initBlockShaders() || !initPostFX()) {
-        MessageBoxA(nullptr, "No se pudo iniciar OpenGL 3.3 (shaders).", "Runes & Ruins", MB_OK);
+        MessageBoxA(nullptr, "No se pudo iniciar OpenGL 3.3 (shaders).", "TerraEngine", MB_OK);
         glfwTerminate();
         return -1;
     }
@@ -48,7 +48,24 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     glEnable(GL_NORMALIZE);
 
     TextureId sunTex = loadTexture("textures/sun.png");
-    TextureId moonTex = loadTexture("textures/moon.png");
+    TextureId moonTex[8] = {
+        loadTexture("textures/moon/full_moon.png"),
+        loadTexture("textures/moon/waning_gibbous.png"),
+        loadTexture("textures/moon/third_quarter.png"),
+        loadTexture("textures/moon/waning_crescent.png"),
+        loadTexture("textures/moon/new_moon.png"),
+        loadTexture("textures/moon/waxing_crescent.png"),
+        loadTexture("textures/moon/first_quarter.png"),
+        loadTexture("textures/moon/waxing_gibbous.png")
+    };
+    auto clampCelestial = [](TextureId tex) {
+        if (!tex) return;
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    };
+    clampCelestial(sunTex);
+    for (int i = 0; i < 8; ++i) clampCelestial(moonTex[i]);
     BlockTextures blockTex;
     blockTex.grassTop = loadTexture("textures/blocks/grass_top.png", true, true);
     blockTex.grassSide = loadTexture("textures/blocks/grass_side.png", true, true);
@@ -77,31 +94,41 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     ImGui_ImplOpenGL3_Init(glsl_version);
     ImGui::StyleColorsDark();
 
-    initializeWorld();
-    cameraSpawnOnGround();
-    glfwSetCursorPosCallback(window, cameraOnMouseMove);
-    glfwSetScrollCallback(window, [](GLFWwindow*, double, double yoff) {
-        if (paused) return;
+    gameMenuInit();
+    glfwSetCursorPosCallback(window, [](GLFWwindow* w, double x, double y) {
+        ImGui_ImplGlfw_CursorPosCallback(w, x, y);
+        cameraOnMouseMove(w, x, y);
+    });
+    glfwSetScrollCallback(window, [](GLFWwindow* w, double xoff, double yoff) {
+        ImGui_ImplGlfw_ScrollCallback(w, xoff, yoff);
+        if (ImGui::GetIO().WantCaptureMouse) return;
+        if (paused || !gameMenuInWorld()) return;
         int slot = selectedPlaceSlot();
         if (yoff > 0.0) slot = (slot + 9) % 10;
         else if (yoff < 0.0) slot = (slot + 1) % 10;
         selectPlaceSlot(slot);
     });
-    glfwSetMouseButtonCallback(window, handleMouseClick);
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetMouseButtonCallback(window, [](GLFWwindow* w, int button, int action, int mods) {
+        ImGui_ImplGlfw_MouseButtonCallback(w, button, action, mods);
+        if (ImGui::GetIO().WantCaptureMouse) return;
+        handleMouseClick(w, button, action, mods);
+    });
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
-    const int renderRadiusXZ = 28;
-    const int renderMaxY = 80;
+    const int renderRadiusXZ = 140;
+    const int shadowRadiusXZ = 72;
+    const int renderMaxY = 140;
     double lastFrameTime = glfwGetTime();
 
     while (!glfwWindowShouldClose(window)) {
         double frameStart = glfwGetTime();
-        float time = (float)frameStart;
-        DayNightLighting light = computeDayNightLighting(frameStart);
+        float time = (float)(gameMenuInWorld() ? (frameStart - worldTimeOrigin) : 0.0);
+        DayNightLighting light = computeDayNightLighting(time);
 
         glfwPollEvents();
-        pollPlaceHotkeys(window);
+        if (gameMenuInWorld()) pollPlaceHotkeys(window);
         pauseMenuUpdateInput(window, menuState);
+        if (gameScreen == GameScreen::Loading) gameMenuTickLoading();
 
         int width, height;
         glfwGetFramebufferSize(window, &width, &height);
@@ -110,13 +137,19 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             continue;
         }
 
+        const bool inWorld = gameMenuInWorld();
         glm::vec3 camPos = cameraPosition();
-        beginShadowPass(light, camPos);
-        renderShadowCasters(renderRadiusXZ, renderMaxY);
-        endShadowPass(width, height);
-
-        beginScenePass(width, height);
-        setup3D(width, height);
+        if (inWorld) {
+            beginShadowPass(light, camPos);
+            renderShadowCasters(shadowRadiusXZ, renderMaxY);
+            endShadowPass(width, height);
+            beginScenePass(width, height);
+            setup3D(width, height);
+        }
+        else {
+            glx.BindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, width, height);
+        }
         glClearColor(light.skyColor.r, light.skyColor.g, light.skyColor.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -124,41 +157,51 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        glLoadIdentity();
-        glm::vec3 bob = cameraBobOffset();
-        gluLookAt(camX + bob.x, camY + bob.y, camZ + bob.z,
-            camX + lookX + bob.x, camY + lookY + bob.y, camZ + lookZ + bob.z, 0, 1, 0);
-
-        glm::vec3 viewDir = cameraLookDirection();
-        glDepthMask(GL_FALSE);
-        glDisable(GL_LIGHTING);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        bindFixedPipeline();
-        drawBillboardTextured(camPos + light.sunDir * 100.0f, viewDir, 8.0f, sunTex, 1.15f);
-        drawBillboardTextured(camPos + light.moonDir * 100.0f, viewDir, 4.0f, moonTex, 1.15f);
-        glDisable(GL_BLEND);
-        glDepthMask(GL_TRUE);
-
         static bool eWasDown = false;
         bool eDown = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
-        if (eDown && !eWasDown && !paused) {
+        if (inWorld && eDown && !eWasDown && !paused) {
             setInventoryOpen(!inventoryOpen());
             cameraResetMouse();
         }
         eWasDown = eDown;
-        bool uiOpen = paused || inventoryOpen();
-        cameraSetLookEnabled(!uiOpen);
+        bool uiOpen = !inWorld || paused || inventoryOpen();
+        cameraSetLookEnabled(inWorld && !uiOpen);
         glfwSetInputMode(window, GLFW_CURSOR, uiOpen ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
 
-        cameraUpdateMovement(window, !uiOpen, (float)(frameStart - lastFrameTime));
-        if (!uiOpen) {
-            updateSelectedBlock(window);
-            tickWater((float)(frameStart - lastFrameTime));
-        fluidTick((float)(frameStart - lastFrameTime));
+        if (inWorld) {
+            glLoadIdentity();
+            glm::vec3 bob = cameraBobOffset();
+            gluLookAt(camX + bob.x, camY + bob.y, camZ + bob.z,
+                camX + lookX + bob.x, camY + lookY + bob.y, camZ + lookZ + bob.z, 0, 1, 0);
+
+            glm::vec3 viewDir = cameraLookDirection();
+            glDepthMask(GL_FALSE);
+            glDisable(GL_LIGHTING);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            bindFixedPipeline();
+            if (light.sunDir.y > -0.06f)
+                drawBillboardTextured(camPos + light.sunDir * 110.0f, viewDir, 10.0f, sunTex, 1.25f);
+            int phase = light.moonPhase;
+            if (phase < 0) phase = 0;
+            if (phase > 7) phase = 7;
+            if (light.moonDir.y > -0.06f && moonTex[phase])
+                drawBillboardTextured(camPos + light.moonDir * 110.0f, viewDir, 6.5f, moonTex[phase], phase == 4 ? 0.35f : 1.15f);
+            glDisable(GL_BLEND);
+            glDepthMask(GL_TRUE);
+
+            cameraUpdateMovement(window, !uiOpen, (float)(frameStart - lastFrameTime));
+            worldStreamAround((float)camX, (float)camZ);
+            fluidSetView((float)camX, (float)camZ);
+            if (!uiOpen) {
+                updateSelectedBlock(window);
+                tickWater((float)(frameStart - lastFrameTime));
+                fluidTick((float)(frameStart - lastFrameTime));
+            }
         }
         lastFrameTime = frameStart;
 
+        if (inWorld) {
         bindOpaqueShader(light, time);
         renderOpaqueBlocks(renderRadiusXZ, renderMaxY);
 
@@ -295,6 +338,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
                 ImGui::EndGroup();
             }
             ImGui::End();
+        }
         }
 
         pauseMenuRender(width, height, menuState);

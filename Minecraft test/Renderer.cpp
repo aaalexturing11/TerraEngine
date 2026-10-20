@@ -6,6 +6,7 @@
 #include "World.h"
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 #include <vector>
 
 struct MeshVert {
@@ -62,7 +63,7 @@ void setup3D(int w, int h) {
     glViewport(0, 0, w, h);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    gluPerspective(cameraFov(), (double)w / h, 0.1, 250.0);
+    gluPerspective(cameraFov(), (double)w / h, 0.12, 360.0);
     glMatrixMode(GL_MODELVIEW);
     glEnable(GL_DEPTH_TEST);
 }
@@ -249,60 +250,26 @@ void drawBillboardTextured(const glm::vec3& pos, const glm::vec3& viewDir, float
     glDisable(GL_TEXTURE_2D);
 }
 
-struct WaterCorner {
-    float h = 0.0f;
-    float fx = 0.0f;
-    float fz = 0.0f;
-    float down = 0.0f;
-};
-
-static WaterCorner sampleCorner(int cx, int cz, int y) {
-    WaterCorner c;
-    float h = 0.0f, fx = 0.0f, fz = 0.0f, down = 0.0f;
+static float cornerVis(int vx, int vz) {
+    float s = 0.0f;
     int n = 0;
-    int air = 0;
-    bool column = false;
-    for (int ox = -1; ox <= 0; ++ox) {
+    for (int ox = -1; ox <= 0; ++ox)
         for (int oz = -1; oz <= 0; ++oz) {
-            int wx = cx + ox, wz = cz + oz;
-            int lv = waterLevelAt(wx, y, wz);
-            if (lv < 0) {
-                ++air;
-                continue;
-            }
-            float ffx, ffz, fd;
-            waterFlow(wx, y, wz, ffx, ffz, fd);
-            Block under = blockAt(wx, y - 1, wz);
-            bool lip = under == Block::Air || under == Block::Torch || isPlant(under);
-            bool falling = fd > 0.5f || waterLevelAt(wx, y + 1, wz) >= 0;
-            float top = (float)y + waterFill01(wx, y, wz);
-            if (top < (float)y + 0.04f) top = (float)y + 0.04f;
-            if (solid(wx, y + 1, wz) && top > (float)y + 0.97f) top = (float)y + 0.97f;
-            if (!lip && falling) {
-                top = y + 1.0f;
-                if (solid(wx, y + 1, wz)) top = y + 0.97f;
-                column = true;
-            }
-            h += top;
-            fx += ffx;
-            fz += ffz;
-            down += fd;
+            int cx = vx + ox, cz = vz + oz;
+            if (!waterHasSurface(cx, cz)) continue;
+            s += waterSurfaceY(cx, cz);
             ++n;
         }
-    }
-    if (!n) {
-        c.h = (float)y;
-        return c;
-    }
-    c.h = h / (float)n;
-    c.fx = fx / (float)n;
-    c.fz = fz / (float)n;
-    c.down = down / (float)n;
-    if (!column && air > 0) {
-        float edge = air / 4.0f;
-        c.h = c.h * (1.0f - edge) + ((float)y + 0.04f) * edge;
-    }
-    return c;
+    if (!n) return 0.0f;
+    return s / (float)n;
+}
+
+static void sampleFlowXZ(int x, int z, float& fx, float& fz, float& down) {
+    fx = fz = down = 0.0f;
+    float h = waterSurfaceY(x, z);
+    int y = (int)std::floor(h - 0.001f);
+    if (y < 0) y = 0;
+    waterFlow(x, y, z, fx, fz, down);
 }
 
 static void pushWater(const glm::vec3& p, const glm::vec3& n, float fx, float fz, float kind, float strength, float across, float lipY) {
@@ -334,92 +301,83 @@ static void drawWaterFace(float x0, float z0, float x1, float z1, float y0, floa
     pushWater(glm::vec3(x0, y1, z0), n, fx, fz, kind, strength, 0, lipY);
 }
 
-static void drawWater(int bx, int by, int bz) {
-    float fx, fz, down;
-    waterFlow(bx, by, bz, fx, fz, down);
-    bool top = waterLevelAt(bx, by + 1, bz) < 0;
-    int lv = waterLevelAt(bx, by, bz);
-    if (lv < 0) lv = 0;
-    float fill = waterFill01(bx, by, bz);
-    float strength = fill;
-    if (strength < 0.18f) strength = 0.18f;
-
-    float surfaceY = (float)by + fill;
-    bool lip = by > 0 && cellOpen(bx, by - 1, bz);
-    if (top && !lip) {
-        WaterCorner c00 = sampleCorner(bx, bz, by);
-        WaterCorner c10 = sampleCorner(bx + 1, bz, by);
-        WaterCorner c11 = sampleCorner(bx + 1, bz + 1, by);
-        WaterCorner c01 = sampleCorner(bx, bz + 1, by);
-        surfaceY = (c00.h + c10.h + c11.h + c01.h) * 0.25f;
-        float x0 = (float)bx, x1 = (float)bx + 1.0f;
-        float z0 = (float)bz, z1 = (float)bz + 1.0f;
-        if (solid(bx - 1, by, bz)) x0 += 0.03f;
-        if (solid(bx + 1, by, bz)) x1 -= 0.03f;
-        if (solid(bx, by, bz - 1)) z0 += 0.03f;
-        if (solid(bx, by, bz + 1)) z1 -= 0.03f;
-        if (!gCapWater) {
-            glBegin(GL_QUADS);
-            glNormal3f(0, 1, 0);
-        }
-        auto vert = [&](const WaterCorner& c, float x, float z) {
-            float h = c.h;
-            int ix = (int)std::floor(x - (x > (float)bx + 0.5f ? 0.01f : 0.0f));
-            int iz = (int)std::floor(z - (z > (float)bz + 0.5f ? 0.01f : 0.0f));
-            if (solid(ix, by + 1, iz) && h > (float)by + 0.97f) h = (float)by + 0.97f;
-            pushWater(glm::vec3(x, h, z), glm::vec3(0, 1, 0), c.fx, c.fz, c.down, 0, 0, 0);
-        };
-        vert(c00, x0, z0);
-        vert(c01, x0, z1);
-        vert(c11, x1, z1);
-        vert(c10, x1, z0);
-        if (!gCapWater) glEnd();
-    }
-    if (!gCapWater) glBegin(GL_QUADS);
-    if (lip) {
-        int y = by - 1;
-        while (y > 0 && cellOpen(bx, y, bz) && !solid(bx, y, bz)) --y;
-        if (solid(bx, y, bz) || blockAt(bx, y, bz) == Block::Water) {
-            float yBot = (blockAt(bx, y, bz) == Block::Water) ? (float)y + waterFill01(bx, y, bz) : (float)(y + 1);
-            float yTop = surfaceY;
-            if (yTop < (float)by + 0.2f) yTop = (float)by + 0.2f;
-            if (yTop - yBot > 0.15f) {
-                float cx = bx + 0.5f;
-                float cz = bz + 0.5f;
-                float hw = 0.04f + 0.03f * strength;
-                drawWaterFace(cx - hw, cz - hw, cx + hw, cz + hw, yBot, yTop, fx, fz, 1.0f, strength, yTop);
-                drawWaterFace(cx - hw, cz + hw, cx + hw, cz - hw, yBot, yTop, fx, fz, 1.0f, strength, yTop);
-            }
-        }
-    }
-    else {
-        float y1 = top ? surfaceY : (float)by + 1.0f;
-        float y0 = (float)by;
-        float xA = (float)bx + 0.04f, xB = (float)bx + 0.96f;
-        float zA = (float)bz + 0.04f, zB = (float)bz + 0.96f;
-        if (cellOpen(bx + 1, by, bz)) drawWaterFace(xB, zA, xB, zB, y0, y1, fx, fz, 2.0f, strength, 0);
-        if (cellOpen(bx - 1, by, bz)) drawWaterFace(xA, zB, xA, zA, y0, y1, fx, fz, 2.0f, strength, 0);
-        if (cellOpen(bx, by, bz + 1)) drawWaterFace(xB, zB, xA, zB, y0, y1, fx, fz, 2.0f, strength, 0);
-        if (cellOpen(bx, by, bz - 1)) drawWaterFace(xA, zA, xB, zA, y0, y1, fx, fz, 2.0f, strength, 0);
-    }
-    if (!gCapWater) glEnd();
+static float clampCeil(int x, int z, float h) {
+    int iy = (int)std::floor(h);
+    if (iy + 1 < HEIGHT && solid(x, iy + 1, z) && h > (float)iy + 0.97f)
+        return (float)iy + 0.97f;
+    return h;
 }
+
+static float fieldH(float x, float z) {
+    int x0 = (int)std::floor(x), z0 = (int)std::floor(z);
+    float tx = x - (float)x0, tz = z - (float)z0;
+    auto at = [](int ix, int iz) {
+        if (!waterHasSurface(ix, iz)) return -1.0f;
+        return waterSurfaceY(ix, iz);
+    };
+    float h00 = at(x0, z0), h10 = at(x0 + 1, z0), h01 = at(x0, z0 + 1), h11 = at(x0 + 1, z0 + 1);
+    float acc = 0.0f, w = 0.0f;
+    auto add = [&](float h, float wt) {
+        if (h < 0.0f) return;
+        acc += h * wt;
+        w += wt;
+    };
+    add(h00, (1.0f - tx) * (1.0f - tz));
+    add(h10, tx * (1.0f - tz));
+    add(h01, (1.0f - tx) * tz);
+    add(h11, tx * tz);
+    if (w < 0.001f) return 0.0f;
+    return acc / w;
+}
+
+static bool clipWaterVert(float& x, float& y, float& z) {
+    const float e = 0.045f;
+    auto blocked = [](float px, float py, float pz) {
+        return solid((int)std::floor(px), (int)std::floor(py), (int)std::floor(pz));
+    };
+    if (blocked(x - e, y, z)) x += e;
+    if (blocked(x + e, y, z)) x -= e;
+    if (blocked(x, y, z - e)) z += e;
+    if (blocked(x, y, z + e)) z -= e;
+    int iy = (int)std::floor(y);
+    if (solid((int)std::floor(x), iy + 1, (int)std::floor(z)) && y > (float)iy + 0.96f)
+        y = (float)iy + 0.96f;
+    return !blocked(x, y, z);
+}
+
+static bool waterPoint(float x, float z) {
+    int ix = (int)std::floor(x);
+    int iz = (int)std::floor(z);
+    if (waterHasSurface(ix, iz)) return !solid(ix, (int)std::floor(waterSurfaceY(ix, iz)), iz);
+    return false;
+}
+
+static float shoreFoam(float x, float z) {
+    if (!waterHasSurface((int)std::floor(x - 0.12f), (int)std::floor(z))) return 1.0f;
+    if (!waterHasSurface((int)std::floor(x + 0.12f), (int)std::floor(z))) return 1.0f;
+    if (!waterHasSurface((int)std::floor(x), (int)std::floor(z - 0.12f))) return 1.0f;
+    if (!waterHasSurface((int)std::floor(x), (int)std::floor(z + 0.12f))) return 1.0f;
+    return 0.0f;
+}
+
+static void bindMeshArrays(const MeshVert* p);
+static void unbindMeshArrays();
 
 static void drawCutoutQuad(int bx, int by, int bz, unsigned tex, const glm::vec3& n,
     const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, const glm::vec3& d,
-    glm::vec2 ta, glm::vec2 tb, glm::vec2 tc, glm::vec2 td) {
+    glm::vec2 ta, glm::vec2 tb, glm::vec2 tc, glm::vec2 td, float wind) {
     FaceLight lit = evaluateFace(bx, by, bz, n);
     glm::vec3 center(bx + 0.5f, by + 0.5f, bz + 0.5f);
     auto put = [&](const glm::vec3& p, const glm::vec2& uv) {
         if (gCap) {
             pushMesh(tex, p, n, lit.albedo.r, lit.albedo.g, lit.albedo.b, lit.blockLight,
                 lit.gi, lit.emission, lit.caustic, lit.ao, uv.x, uv.y, tex ? 1.0f : 0.0f, 0.0f,
-                center.x, center.y, center.z, 0.0f);
+                center.x, center.y, center.z, wind);
             return;
         }
         glx.MultiTexCoord4f(GL_TEXTURE0, lit.gi, lit.emission, lit.caustic, lit.ao);
-        glx.MultiTexCoord3f(GL_TEXTURE1, uv.x, uv.y, tex ? 1.0f : 0.0f);
-        glx.MultiTexCoord4f(GL_TEXTURE2, center.x, center.y, center.z, 0.0f);
+        glx.MultiTexCoord4f(GL_TEXTURE1, uv.x, uv.y, tex ? 1.0f : 0.0f, 0.0f);
+        glx.MultiTexCoord4f(GL_TEXTURE2, center.x, center.y, center.z, wind);
         glVertex3f(p.x, p.y, p.z);
     };
     if (!gCap) {
@@ -446,10 +404,10 @@ static void drawPlant(int bx, int by, int bz) {
     float z0 = (float)bz, z1 = z0 + 1.0f;
     glm::vec3 up(0, 1, 0);
     glm::vec2 uv00(0, 0), uv10(1, 0), uv11(1, 1), uv01(0, 1);
-    drawCutoutQuad(bx, by, bz, tex, up, { x0, y0, z0 }, { x1, y0, z1 }, { x1, y1, z1 }, { x0, y1, z0 }, uv00, uv10, uv11, uv01);
-    drawCutoutQuad(bx, by, bz, tex, up, { x1, y0, z1 }, { x0, y0, z0 }, { x0, y1, z0 }, { x1, y1, z1 }, uv00, uv10, uv11, uv01);
-    drawCutoutQuad(bx, by, bz, tex, up, { x1, y0, z0 }, { x0, y0, z1 }, { x0, y1, z1 }, { x1, y1, z0 }, uv00, uv10, uv11, uv01);
-    drawCutoutQuad(bx, by, bz, tex, up, { x0, y0, z1 }, { x1, y0, z0 }, { x1, y1, z0 }, { x0, y1, z1 }, uv00, uv10, uv11, uv01);
+    drawCutoutQuad(bx, by, bz, tex, up, { x0, y0, z0 }, { x1, y0, z1 }, { x1, y1, z1 }, { x0, y1, z0 }, uv00, uv10, uv11, uv01, 1.7f);
+    drawCutoutQuad(bx, by, bz, tex, up, { x1, y0, z1 }, { x0, y0, z0 }, { x0, y1, z0 }, { x1, y1, z1 }, uv00, uv10, uv11, uv01, 1.7f);
+    drawCutoutQuad(bx, by, bz, tex, up, { x1, y0, z0 }, { x0, y0, z1 }, { x0, y1, z1 }, { x1, y1, z0 }, uv00, uv10, uv11, uv01, 1.7f);
+    drawCutoutQuad(bx, by, bz, tex, up, { x0, y0, z1 }, { x1, y0, z0 }, { x1, y1, z0 }, { x0, y1, z1 }, uv00, uv10, uv11, uv01, 1.7f);
 }
 
 static void drawTorch(int bx, int by, int bz) {
@@ -488,7 +446,7 @@ static void drawTorch(int bx, int by, int bz) {
         glm::vec3 across = glm::normalize(glm::cross(axis, out)) * half;
         drawCutoutQuad(bx, by, bz, tex, out,
             base - across + o, base + across + o, tip + across + o, tip - across + o,
-            t00, t10, t11, t01);
+            t00, t10, t11, t01, 0.0f);
     };
     side(right);
     side(-right);
@@ -499,36 +457,48 @@ static void drawTorch(int bx, int by, int bz) {
     drawCutoutQuad(bx, by, bz, tex, -axis,
         base - right * half - fwd * half, base + right * half - fwd * half,
         base + right * half + fwd * half, base - right * half + fwd * half,
-        b00, b10, b11, b01);
+        b00, b10, b11, b01, 0.0f);
     drawCutoutQuad(bx, by, bz, tex, axis,
         tip - right * half + fwd * half, tip + right * half + fwd * half,
         tip + right * half - fwd * half, tip - right * half - fwd * half,
-        f00, f01, f11, f10);
+        f00, f01, f11, f10, 0.0f);
 }
 
-static const int kChunk = 16;
-static const int kChunkCount = GRID / kChunk;
-static const int kMeshY = 96;
+static const int kChunk = CHUNK;
+static const int kMeshY = 140;
 
 struct ChunkMesh {
+    int cx = 0, cz = 0;
     std::vector<MeshBatch> opaque;
     std::vector<MeshBatch> cutout;
     std::vector<MeshBatch> leaves;
     std::vector<MeshVert> water;
 };
 
-static ChunkMesh gChunks[kChunkCount][kChunkCount];
+static std::unordered_map<unsigned long long, ChunkMesh> gMeshes;
+
+static unsigned long long meshKey(int cx, int cz) {
+    return ((unsigned long long)(unsigned)cx << 32) | (unsigned)cz;
+}
+
+static int divFloorR(int a, int b) {
+    int q = a / b, r = a % b;
+    if (r != 0 && ((a < 0) != (b < 0))) --q;
+    return q;
+}
 
 static void buildChunk(int cx, int cz) {
-    ChunkMesh& chunk = gChunks[cx][cz];
+    ChunkMesh& chunk = gMeshes[meshKey(cx, cz)];
+    chunk.cx = cx;
+    chunk.cz = cz;
     chunk.opaque.clear();
     chunk.cutout.clear();
     chunk.leaves.clear();
     chunk.water.clear();
     int x0 = cx * kChunk;
     int z0 = cz * kChunk;
-    int x1 = std::min(GRID - 1, x0 + kChunk - 1);
-    int z1 = std::min(GRID - 1, z0 + kChunk - 1);
+    int x1 = x0 + kChunk - 1;
+    int z1 = z0 + kChunk - 1;
     auto solidBlock = [](Block b) {
         return b == Block::Grass || b == Block::Dirt || b == Block::Lava || b == Block::Stone
             || b == Block::Obsidian || b == Block::Log;
@@ -538,34 +508,83 @@ static void buildChunk(int cx, int cz) {
     for (int x = x0; x <= x1; ++x)
         for (int z = z0; z <= z1; ++z)
             for (int y = 0; y <= kMeshY && y < HEIGHT; ++y)
-                if (solidBlock(blocks[x][y][z])) emitBox(x, y, z, 0.5f, true);
+                if (solidBlock(blockAt(x, y, z))) emitBox(x, y, z, 0.5f, true);
     gCap = &chunk.leaves;
     for (int x = x0; x <= x1; ++x)
         for (int z = z0; z <= z1; ++z)
             for (int y = 0; y <= kMeshY && y < HEIGHT; ++y)
-                if (blocks[x][y][z] == Block::Leaves) emitBox(x, y, z, 0.5f, true);
+                if (blockAt(x, y, z) == Block::Leaves) emitBox(x, y, z, 0.5f, true);
     gCap = &chunk.cutout;
     for (int x = x0; x <= x1; ++x)
         for (int z = z0; z <= z1; ++z)
             for (int y = 0; y <= kMeshY && y < HEIGHT; ++y) {
-                Block b = blocks[x][y][z];
+                Block b = blockAt(x, y, z);
                 if (b == Block::Torch) drawTorch(x, y, z);
                 else if (isPlant(b)) drawPlant(x, y, z);
             }
     gCap = nullptr;
+    gCapWater = &chunk.water;
+    auto colH = [](int x, int z) {
+        if (!waterHasSurface(x, z)) return 0.0f;
+        float h = waterSurfaceY(x, z);
+        if (h < 0.02f) return 0.0f;
+        if (solid(x, (int)std::floor(h), z)) return 0.0f;
+        return h;
+    };
+    for (int z = z0; z <= z1; ++z)
+        for (int x = x0; x <= x1; ++x) {
+            float y00 = colH(x, z);
+            if (y00 < 0.02f) continue;
+            float y10 = colH(x + 1, z);
+            float y11 = colH(x + 1, z + 1);
+            float y01 = colH(x, z + 1);
+            if (y10 < 0.02f) y10 = y00;
+            if (y01 < 0.02f) y01 = y00;
+            if (y11 < 0.02f) y11 = y00;
+            float foam = 0.0f;
+            if (!waterHasSurface(x - 1, z) || !waterHasSurface(x + 1, z)
+                || !waterHasSurface(x, z - 1) || !waterHasSurface(x, z + 1))
+                foam = 1.0f;
+            float fx0 = (float)x, fz0 = (float)z, fx1 = fx0 + 1.0f, fz1 = fz0 + 1.0f;
+            pushWater(glm::vec3(fx0, y00, fz0), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
+            pushWater(glm::vec3(fx0, y01, fz1), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
+            pushWater(glm::vec3(fx1, y11, fz1), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
+            pushWater(glm::vec3(fx1, y10, fz0), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
+        }
     gCapWater = nullptr;
 }
 
 static void updateWorldMeshes() {
-    int x0, z0, x1, z1;
-    if (!consumeMeshDirty(x0, z0, x1, z1)) return;
-    int cx0 = std::max(0, x0 / kChunk);
-    int cx1 = std::min(kChunkCount - 1, x1 / kChunk);
-    int cz0 = std::max(0, z0 / kChunk);
-    int cz1 = std::min(kChunkCount - 1, z1 / kChunk);
-    for (int cx = cx0; cx <= cx1; ++cx)
-        for (int cz = cz0; cz <= cz1; ++cz)
-            buildChunk(cx, cz);
+    int x0 = 0, z0 = 0, x1 = 0, z1 = 0;
+    bool dirty = consumeMeshDirty(x0, z0, x1, z1);
+    bool waterDirty = consumeWaterMeshDirty();
+    int n = loadedChunkCount();
+    glm::vec3 cam = cameraPosition();
+    int ccx = (int)std::floor(cam.x / (float)kChunk);
+    int ccz = (int)std::floor(cam.z / (float)kChunk);
+    std::unordered_map<unsigned long long, char> keep;
+    int built = 0;
+    for (int i = 0; i < n; ++i) {
+        int cx, cz;
+        loadedChunkCoord(i, cx, cz);
+        unsigned long long k = meshKey(cx, cz);
+        keep[k] = 1;
+        bool missing = gMeshes.find(k) == gMeshes.end();
+        bool overlap = dirty && !(cx * kChunk > x1 || (cx + 1) * kChunk - 1 < x0
+            || cz * kChunk > z1 || (cz + 1) * kChunk - 1 < z0);
+        int adx = cx - ccx; if (adx < 0) adx = -adx;
+        int adz = cz - ccz; if (adz < 0) adz = -adz;
+        int d = adx > adz ? adx : adz;
+        if (waterDirty && !dirty && d <= 5) overlap = true;
+        if (!missing && !overlap) continue;
+        if (d > 1 && built >= 2) continue;
+        buildChunk(cx, cz);
+        ++built;
+    }
+    for (auto it = gMeshes.begin(); it != gMeshes.end(); ) {
+        if (keep.find(it->first) == keep.end()) it = gMeshes.erase(it);
+        else ++it;
+    }
 }
 
 static bool chunkVisible(int cx, int cz, int radius) {
@@ -637,14 +656,45 @@ static void drawWaterMesh(const std::vector<MeshVert>& water) {
     unbindMeshArrays();
 }
 
+void clearWorldMeshes() {
+    gMeshes.clear();
+}
+
+int pumpWorldMeshes(int maxBuild) {
+    if (maxBuild < 1) maxBuild = 1;
+    int n = loadedChunkCount();
+    glm::vec3 cam = cameraPosition();
+    int ccx = (int)std::floor(cam.x / (float)kChunk);
+    int ccz = (int)std::floor(cam.z / (float)kChunk);
+    struct Miss { int cx, cz, d; };
+    std::vector<Miss> miss;
+    miss.reserve(32);
+    for (int i = 0; i < n; ++i) {
+        int cx, cz;
+        loadedChunkCoord(i, cx, cz);
+        if (gMeshes.find(meshKey(cx, cz)) != gMeshes.end()) continue;
+        int adx = cx - ccx; if (adx < 0) adx = -adx;
+        int adz = cz - ccz; if (adz < 0) adz = -adz;
+        Miss m;
+        m.cx = cx; m.cz = cz; m.d = adx > adz ? adx : adz;
+        miss.push_back(m);
+    }
+    std::sort(miss.begin(), miss.end(), [](const Miss& a, const Miss& b) { return a.d < b.d; });
+    int built = 0;
+    for (size_t i = 0; i < miss.size() && built < maxBuild; ++i) {
+        buildChunk(miss[i].cx, miss[i].cz);
+        ++built;
+    }
+    return (int)miss.size() - built;
+}
+
 void renderShadowCasters(int renderRadiusXZ, int) {
     updateWorldMeshes();
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
-    for (int cx = 0; cx < kChunkCount; ++cx)
-        for (int cz = 0; cz < kChunkCount; ++cz)
-            if (chunkVisible(cx, cz, renderRadiusXZ))
-                drawBatches(gChunks[cx][cz].opaque, false);
+    for (auto it = gMeshes.begin(); it != gMeshes.end(); ++it)
+        if (chunkVisible(it->second.cx, it->second.cz, renderRadiusXZ))
+            drawBatches(it->second.opaque, false);
     glDisable(GL_CULL_FACE);
 }
 
@@ -652,23 +702,20 @@ void renderOpaqueBlocks(int renderRadiusXZ, int) {
     updateWorldMeshes();
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
-    for (int cx = 0; cx < kChunkCount; ++cx)
-        for (int cz = 0; cz < kChunkCount; ++cz) {
-            if (!chunkVisible(cx, cz, renderRadiusXZ)) continue;
-            drawBatches(gChunks[cx][cz].opaque, false);
-        }
+    for (auto it = gMeshes.begin(); it != gMeshes.end(); ++it) {
+        if (!chunkVisible(it->second.cx, it->second.cz, renderRadiusXZ)) continue;
+        drawBatches(it->second.opaque, false);
+    }
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    for (int cx = 0; cx < kChunkCount; ++cx)
-        for (int cz = 0; cz < kChunkCount; ++cz)
-            if (chunkVisible(cx, cz, renderRadiusXZ))
-                drawBatches(gChunks[cx][cz].leaves, false);
+    for (auto it = gMeshes.begin(); it != gMeshes.end(); ++it)
+        if (chunkVisible(it->second.cx, it->second.cz, renderRadiusXZ))
+            drawBatches(it->second.leaves, false);
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
-    for (int cx = 0; cx < kChunkCount; ++cx)
-        for (int cz = 0; cz < kChunkCount; ++cz)
-            if (chunkVisible(cx, cz, renderRadiusXZ))
-                drawBatches(gChunks[cx][cz].cutout, true);
+    for (auto it = gMeshes.begin(); it != gMeshes.end(); ++it)
+        if (chunkVisible(it->second.cx, it->second.cz, renderRadiusXZ))
+            drawBatches(it->second.cutout, true);
 }
 
 void renderWaterBlocks(int renderRadiusXZ, int) {
@@ -677,15 +724,9 @@ void renderWaterBlocks(int renderRadiusXZ, int) {
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_TRUE);
     gCapWater = nullptr;
-    int n = waterCellCount();
-    for (int i = 0; i < n; ++i) {
-        int x, y, z;
-        getWaterCell(i, x, y, z);
-        int cx = x / kChunk, cz = z / kChunk;
-        if (cx < 0 || cz < 0 || cx >= kChunkCount || cz >= kChunkCount) continue;
-        if (!chunkVisible(cx, cz, renderRadiusXZ)) continue;
-        drawWater(x, y, z);
-    }
+    for (auto it = gMeshes.begin(); it != gMeshes.end(); ++it)
+        if (chunkVisible(it->second.cx, it->second.cz, renderRadiusXZ))
+            drawWaterMesh(it->second.water);
     fluidDraw();
     glDisable(GL_BLEND);
 }

@@ -11,9 +11,11 @@ struct DayNightLighting {
     glm::vec3 ambientRGB{ 0.2f };
     glm::vec3 skyColor{ 0.53f, 0.81f, 0.92f };
     float dayFactor = 1.0f;
+    float dawnFactor = 0.0f;
     float duskFactor = 0.0f;
     float sunIntensity = 1.0f;
     float moonIntensity = 0.0f;
+    int moonPhase = 0;
 };
 
 struct FaceLight {

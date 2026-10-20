@@ -1,5 +1,6 @@
 #include "BlockSelection.h"
 #include "Camera.h"
+#include "PauseMenu.h"
 #include "World.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -142,7 +143,7 @@ const char* selectedPlaceName() {
 }
 
 void handleMouseClick(GLFWwindow*, int button, int action, int) {
-    if (gInventory || action != GLFW_PRESS || !hasSelected) return;
+    if (gInventory || paused || !gameMenuInWorld() || action != GLFW_PRESS || !hasSelected) return;
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
         setBlock(selectedBlock.x, selectedBlock.y, selectedBlock.z, Block::Air);
     }

@@ -1,11 +1,12 @@
 #pragma once
 
 void fluidImpact(float x, float y, float z, float speed, float mass);
-void fluidStream(float x, float yTop, float yBot, float z, float strength);
-void fluidClearFalls();
-void fluidAddFall(float x, float yTop, float yBot, float z, float rate);
+void fluidWake(float x, float z, float vx, float vz);
 void fluidTick(float dt);
 void fluidDraw();
 void fluidBindRipple(int unit);
 void fluidBindHeight(int unit);
+void fluidBindFft(int unit);
+void fluidSetView(float x, float z);
+void fluidHeightOrigin(float& x, float& z);
 float fluidRippleWorldSize();

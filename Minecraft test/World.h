@@ -34,14 +34,23 @@ struct BlockInfo {
 const BlockInfo& blockInfo(Block block);
 bool allowsPlacementOnTop(Block support);
 
-extern Block blocks[GRID][HEIGHT][GRID];
-
 bool inBounds(int x, int y, int z);
 bool occupied(int x, int y, int z);
 bool solid(int x, int y, int z);
 Block blockAt(int x, int y, int z);
 
+void worldSetSeed(unsigned seed);
+unsigned worldGetSeed();
+void worldReset();
 void initializeWorld();
+void worldStreamAround(float x, float z);
+int worldStreamStep(float x, float z, int inner, int budget);
+int worldMissingAround(float x, float z, int radius);
+bool worldFindSpawn(int& x, int& y, int& z);
+void worldFixSpawn(int& x, int& y, int& z);
+int loadedChunkCount();
+void loadedChunkCoord(int i, int& cx, int& cz);
+
 void setBlock(int x, int y, int z, Block value, int meta = 0);
 int blockMeta(int x, int y, int z);
 
@@ -60,8 +69,15 @@ void waterImpact(int x, int y, int z, float vy, float mass);
 int waterLevelAt(int x, int y, int z);
 float waterFill01(int x, int y, int z);
 float waterSurfaceY(int x, int z);
+bool waterHasSurface(int x, int z);
+bool waterHasFall(int x, int z);
+float waterFallTopY(int x, int z);
+float waterFallBotY(int x, int z);
+bool waterSwimmable(int x, int y, int z);
+float waterPoolDepth(int x, int z);
 void refreshWaterHeights();
-extern float waterHeightXZ[GRID * GRID];
+void markWaterMeshDirty();
+bool consumeWaterMeshDirty();
 int waterCellCount();
 void getWaterCell(int i, int& x, int& y, int& z);
 void waterFlow(int x, int y, int z, float& fx, float& fz, float& down);

@@ -1,4 +1,5 @@
 #include "Camera.h"
+#include "FluidSolver.h"
 #include "MathUtil.h"
 #include "World.h"
 
@@ -62,13 +63,15 @@ static const float kHeight = 1.8f;
 static const float kRadius = 0.3f;
 
 static bool overlapsWater(float x, float feet, float z) {
-    const float heights[3] = { 0.2f, 0.9f, 1.5f };
+    const float heights[3] = { 0.2f, 0.55f, 0.95f };
     int ix = (int)std::floor(x);
     int iz = (int)std::floor(z);
+    int hits = 0;
     for (float h : heights) {
-        if (blockAt(ix, (int)std::floor(feet + h), iz) == Block::Water) return true;
+        int iy = (int)std::floor(feet + h);
+        if (waterSwimmable(ix, iy, iz)) ++hits;
     }
-    return false;
+    return hits >= 1 && waterPoolDepth(ix, iz) >= 0.70f;
 }
 
 static bool hitsSolid(float x, float feet, float z) {
@@ -121,24 +124,19 @@ static float snapToSupport(float x, float feet, float z) {
     return feet;
 }
 
+void cameraSetSpawn(int x, int y, int z) {
+    camX = (double)x + 0.5;
+    camZ = (double)z + 0.5;
+    camY = (double)y + 1.0 + (double)kEye;
+    bodyVx = bodyVy = bodyVz = 0.0f;
+    grounded = true;
+    flying = false;
+}
+
 void cameraSpawnOnGround() {
-    for (int x = 8; x < GRID - 8; ++x) {
-        for (int z = 8; z < GRID - 8; ++z) {
-            int top = -1;
-            for (int y = 48; y >= 0; --y) {
-                if (solid(x, y, z)) { top = y; break; }
-            }
-            if (top < 0) continue;
-            if (solid(x, top + 1, z) || solid(x, top + 2, z)) continue;
-            camX = x + 0.5;
-            camZ = z + 0.5;
-            camY = top + 1.0 + kEye;
-            bodyVx = bodyVy = bodyVz = 0.0f;
-            grounded = true;
-            flying = false;
-            return;
-        }
-    }
+    int x = 0, y = SEA_LEVEL, z = 0;
+    worldFindSpawn(x, y, z);
+    cameraSetSpawn(x, y, z);
 }
 
 void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
@@ -248,6 +246,7 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
         moveHorizontal(px, pz, feet, bodyVx * dt, bodyVz * dt);
         camX = px;
         camZ = pz;
+        fluidWake((float)camX, (float)camZ, bodyVx, bodyVz);
         float dy = bodyVy * dt;
         int steps = (int)(std::fabs(dy) / 0.2f) + 1;
         float step = dy / (float)steps;
@@ -406,4 +405,8 @@ glm::vec3 cameraPosition() {
 
 glm::vec3 cameraLookDirection() {
     return glm::vec3((float)lookX, (float)lookY, (float)lookZ);
+}
+
+glm::vec3 cameraVelocity() {
+    return glm::vec3(bodyVx, bodyVy, bodyVz);
 }

@@ -1,5 +1,7 @@
 #include "BlockShader.h"
+#include "GlIncludes.h"
 #include "GlExt.h"
+#include "Camera.h"
 #include "FluidSolver.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -25,6 +27,8 @@ out float vTex;
 out float vLeaf;
 out float vLamp;
 uniform float uTime;
+uniform vec3 uPlayer;
+uniform vec2 uPlayerVel;
 void main() {
     vec3 p = gl_Vertex.xyz;
     float wind = gl_MultiTexCoord2.w;
@@ -37,6 +41,19 @@ void main() {
         p.x += gustX * 0.035 + flutterX * 0.014 * wind;
         p.z += gustZ * 0.03 + flutterZ * 0.014 * wind;
         p.y += abs(gustX) * 0.008 * wind;
+        if (wind > 1.2) {
+            vec2 d = p.xz - uPlayer.xz;
+            float dist = length(d);
+            float h = clamp((p.y - (c.y - 0.5)) / 1.05, 0.0, 1.0);
+            float spd = length(uPlayerVel);
+            float push = smoothstep(1.35, 0.10, dist) * h * (0.40 + 0.60 * smoothstep(0.0, 3.2, spd));
+            vec2 dir = dist > 0.001 ? normalize(d) : vec2(1.0, 0.0);
+            float shake = sin(uTime * 17.0 + c.x * 4.4 + c.z * 3.2) * 0.11;
+            float sway = sin(uTime * 10.0 + dist * 7.0) * 0.07;
+            p.xz += dir * push * (0.38 + shake);
+            p.xz += vec2(-dir.y, dir.x) * push * sway;
+            p.y -= push * 0.10;
+        }
     }
     vWorld = p;
     vNormal = normalize(gl_Normal);
@@ -69,6 +86,7 @@ uniform vec3 uAmbient;
 uniform vec3 uSky;
 uniform float uTime;
 uniform float uSunAmt;
+uniform vec3 uCam;
 uniform sampler2D uShadowMap;
 uniform sampler2D uAlbedo;
 uniform mat4 uShadowMat;
@@ -118,7 +136,10 @@ void main() {
     float wave = 0.6 + 0.4 * sin(uTime * 2.5 + vWorld.x * 7.5 + vWorld.z * 6.5);
     vec3 caustics = vec3(0.55, 0.95, 0.90) * cau * wave * uSunAmt * skyVis * 0.85;
     vec3 glow = albedo * emit * 2.6;
-    fragColor = vec4(indirect + lampCol + sun + moon + caustics + glow, alpha);
+    vec3 col = indirect + lampCol + sun + moon + caustics + glow;
+    float fog = smoothstep(118.0, 168.0, length(vWorld.xz - uCam.xz));
+    col = mix(col, uSky, fog);
+    fragColor = vec4(col, alpha);
 }
 )GLSL";
 
@@ -132,22 +153,33 @@ out float vLip;
 uniform float uTime;
 uniform sampler2D uRipple;
 uniform sampler2D uHeight;
+uniform sampler2D uFft;
 uniform float uWorld;
+uniform vec2 uHeightOrigin;
+
 void main() {
     vec3 p = gl_Vertex.xyz;
     vFlow = gl_MultiTexCoord0;
     vAcross = gl_MultiTexCoord1.x;
     vLip = gl_MultiTexCoord1.y;
     vNormal = gl_Normal;
-    float wave = sin(p.x * 1.55 + uTime * 1.2) * 0.012;
-    wave += cos(p.z * 1.28 - uTime * 0.85) * 0.01;
-    wave += sin((p.x + p.z) * 0.62 + uTime * 0.55) * 0.008;
     if (gl_Normal.y > 0.5) {
-        p.y += wave + textureLod(uRipple, p.xz / uWorld, 0.0).r * 0.07;
-    }
-    else if (vFlow.z < 1.5 && vLip > 1.0) {
-        float h = max(vLip - p.y, 0.0);
-        p += gl_Normal * sin(p.y * 5.5 - uTime * 3.2) * 0.018 * sqrt(h + 0.05);
+        vec2 uv = p.xz / 16.0;
+        vec3 fft = textureLod(uFft, uv, 0.0).xyz;
+        vec2 hUV = (p.xz - uHeightOrigin) / uWorld;
+        float occ0 = textureLod(uHeight, hUV, 0.0).g;
+        float edge = smoothstep(0.22, 0.92, occ0);
+        vec2 chopped = p.xz + fft.yz * edge;
+        float occ1 = textureLod(uHeight, (chopped - uHeightOrigin) / uWorld, 0.0).g;
+        if (occ1 > 0.82) p.xz = chopped;
+        float rip = textureLod(uRipple, (p.xz - uHeightOrigin) / uWorld, 0.0).r;
+        float e = 1.0 / 32.0;
+        float hL = textureLod(uFft, uv - vec2(e, 0), 0.0).x;
+        float hR = textureLod(uFft, uv + vec2(e, 0), 0.0).x;
+        float hD = textureLod(uFft, uv - vec2(0, e), 0.0).x;
+        float hU = textureLod(uFft, uv + vec2(0, e), 0.0).x;
+        p.y += (fft.x + rip * 0.12) * edge;
+        vNormal = normalize(mix(vec3(0.0, 1.0, 0.0), vec3(hL - hR, 0.55, hD - hU), edge));
     }
     vWorld = p;
     gl_Position = gl_ModelViewProjectionMatrix * vec4(p, 1.0);
@@ -171,11 +203,56 @@ uniform mat4 uViewProj;
 uniform sampler2D uScene;
 uniform sampler2D uDepth;
 uniform sampler2D uRipple;
+uniform sampler2D uHeight;
+uniform sampler2D uFft;
+uniform sampler2D uShadowMap;
+uniform mat4 uShadowMat;
 uniform float uWorld;
+uniform vec2 uHeightOrigin;
 
 float linearDepth(float d) {
     float z = d * 2.0 - 1.0;
     return (2.0 * 0.1 * 250.0) / (250.1 - z * (250.0 - 0.1));
+}
+
+float sunVis(vec3 world) {
+    if (uSunAmt < 0.08) return 0.0;
+    vec4 sc = uShadowMat * vec4(world, 1.0);
+    if (sc.w <= 0.0) return 1.0;
+    vec3 p = sc.xyz / sc.w;
+    if (p.x < 0.0 || p.y < 0.0 || p.x > 1.0 || p.y > 1.0) return 1.0;
+    float d = texture(uShadowMap, p.xy).r;
+    return (d + 0.0035 > p.z) ? 1.0 : 0.0;
+}
+
+vec3 waterGodRays(vec3 world, vec3 n, float thick) {
+    if (uSunAmt < 0.12 || thick < 1.15) return vec3(0.0);
+    vec3 sun = normalize(uSunDir);
+    float hit = max(dot(n, sun), 0.0);
+    if (hit < 0.02) return vec3(0.0);
+    float vis0 = sunVis(world + n * 0.10);
+    if (vis0 < 0.15) return vec3(0.0);
+    vec3 into = -sun;
+    float maxD = min(thick, 9.0);
+    float acc = 0.0;
+    for (int i = 1; i <= 3; ++i) {
+        float t = float(i) / 3.0 * maxD;
+        vec3 p = world + into * t;
+        float surfaceH = texture(uHeight, (p.xz - uHeightOrigin) / uWorld).r;
+        if (surfaceH < 0.08) continue;
+        float under = surfaceH - p.y;
+        if (under < 0.0) continue;
+        float vis = sunVis(p + vec3(0.0, 0.12, 0.0));
+        float beam = sin(p.x * 1.85 + p.z * 1.12 + uTime * 0.38);
+        beam *= sin(p.x * 0.52 - p.z * 0.74 + uTime * 0.21);
+        beam = smoothstep(0.12, 0.78, beam * 0.5 + 0.5);
+        float scatter = exp(-under * 0.20) * exp(-t * 0.07);
+        acc += vis * beam * scatter;
+    }
+    acc *= 0.33;
+    float viewAlign = pow(max(dot(normalize(uCam - world), sun), 0.0), 3.5);
+    float deep = clamp((thick - 1.1) / 4.2, 0.0, 1.0);
+    return vec3(0.62, 0.90, 1.0) * acc * uSunAmt * hit * (0.28 + 0.95 * viewAlign) * deep * 1.35;
 }
 
 void main() {
@@ -186,94 +263,70 @@ void main() {
             vec2 uv = vec2(vAcross, vLip);
             float d = length(uv - 0.5) * 2.0;
             if (d > 1.0) discard;
-            float rim = smoothstep(1.0, 0.35, d);
+            float rim = smoothstep(1.0, 0.32, d);
             vec3 col = mix(vec3(0.08, 0.38, 0.55), vec3(0.88, 0.96, 1.0), rim);
             fragColor = vec4(col, 0.86 * rim * clamp(vFlow.w, 0.2, 1.0));
             return;
         }
         vec3 view = normalize(uCam - vWorld);
         float fres = pow(1.0 - abs(dot(geo, view)), 3.0);
-        if (vFlow.z > 1.5) {
-            vec3 col = mix(vec3(0.03, 0.32, 0.46), uSky * vec3(0.72, 0.88, 1.0), fres * 0.55);
-            fragColor = vec4(col, 0.58);
+        vec3 col = mix(vec3(0.02, 0.28, 0.42), uSky * vec3(0.70, 0.88, 1.0), fres * 0.58);
+        if (vFlow.z > 0.45 && vFlow.z < 1.6) {
+            float along = fract(vWorld.y * 1.65 - uTime * 2.6);
+            float streak = smoothstep(0.0, 0.12, along) * smoothstep(0.62, 0.22, along);
+            float edge = abs(vAcross * 2.0 - 1.0);
+            col += vec3(0.12, 0.22, 0.24) * streak * 0.55;
+            float alpha = 0.34 * (1.0 - edge * 0.55) * (0.75 + streak * 0.35);
+            fragColor = vec4(col, clamp(alpha, 0.16, 0.48));
             return;
         }
-        float stream = clamp(vFlow.w, 0.0, 1.0);
-        float h = max(vLip - vWorld.y, 0.0);
-        float speed = sqrt(h * 2.2 + 0.15);
-        float along = fract(sqrt(h + 0.05) * 3.4 - uTime * (0.55 + speed * 0.85));
-        float breakup = smoothstep(0.8, 4.5, h);
-        float dropLen = mix(0.85, 0.16, breakup);
-        float drop = smoothstep(0.0, 0.04, along) * smoothstep(dropLen, dropLen * 0.28, along);
-        float satellite = fract(along * 1.7 + 0.38);
-        satellite = smoothstep(0.0, 0.03, satellite) * smoothstep(0.13, 0.04, satellite) * breakup;
-        float core = (1.0 - breakup * 0.85) * mix(0.15, 0.65, stream);
-        float across = abs(vAcross * 2.0 - 1.0);
-        float halfW = mix(0.22, 0.55, stream) * mix(1.0, 0.32, breakup);
-        float bulge = mix(0.75, 1.15, max(drop, satellite));
-        if (across > halfW * bulge) discard;
-        if (core < 0.04 && drop < 0.05 && satellite < 0.05) discard;
-        vec3 body = mix(vec3(0.03, 0.30, 0.46), vec3(0.72, 0.93, 0.98), max(drop, satellite));
-        vec3 col = mix(body, uSky * vec3(0.75, 0.9, 1.0), fres * 0.72);
-        float alpha = mix(0.22, 0.78, max(core, max(drop, satellite)));
-        fragColor = vec4(col, alpha);
+        fragColor = vec4(col, 0.62);
         return;
     }
 
-    vec3 n = normalize(vec3(
-        sin(vWorld.x * 1.55 + uTime * 1.2) * 0.045 + vFlow.x * 0.04,
-        1.0,
-        cos(vWorld.z * 1.28 - uTime * 0.85) * 0.045 + vFlow.y * 0.04));
+    vec2 fuv = vWorld.xz / 16.0;
+    float e = 1.0 / 32.0;
+    float hL = texture(uFft, fuv - vec2(e, 0)).x;
+    float hR = texture(uFft, fuv + vec2(e, 0)).x;
+    float hD = texture(uFft, fuv - vec2(0, e)).x;
+    float hU = texture(uFft, fuv + vec2(0, e)).x;
+    vec3 n = normalize(vec3(hL - hR, 0.55, hD - hU));
     {
-        vec2 ruv = vWorld.xz / uWorld;
-        float e = 1.0 / (uWorld * 4.0);
-        float hx = texture(uRipple, ruv + vec2(e, 0)).r - texture(uRipple, ruv - vec2(e, 0)).r;
-        float hz = texture(uRipple, ruv + vec2(0, e)).r - texture(uRipple, ruv - vec2(0, e)).r;
-        n = normalize(n + vec3(-hx, 0.0, -hz) * 2.2);
+        vec2 ruv = (vWorld.xz - uHeightOrigin) / uWorld;
+        float re = 1.0 / (uWorld * 4.0);
+        float hx = texture(uRipple, ruv + vec2(re, 0)).r - texture(uRipple, ruv - vec2(re, 0)).r;
+        float hz = texture(uRipple, ruv + vec2(0, re)).r - texture(uRipple, ruv - vec2(0, re)).r;
+        n = normalize(n + vec3(-hx, 0.0, -hz) * 2.4);
     }
     vec3 view = normalize(uCam - vWorld);
     vec2 uv = gl_FragCoord.xy / vec2(textureSize(uScene, 0));
-    vec2 refr = clamp(uv + n.xz * 0.015, vec2(0.001), vec2(0.999));
+    vec2 distort = n.xz * 0.02;
+    vec2 texCoordRefract = clamp(uv + distort, vec2(0.001), vec2(0.999));
+    vec2 texCoordReflect = vec2(uv.x, 1.0 - uv.y) + distort;
+    texCoordReflect.x = clamp(texCoordReflect.x, 0.001, 0.999);
+    texCoordReflect.y = clamp(texCoordReflect.y, 0.001, 0.999);
 
     float sceneD = texture(uDepth, uv).r;
-    float thick = sceneD > 0.998 ? 14.0 : max(linearDepth(sceneD) - linearDepth(gl_FragCoord.z), 0.0);
-    float deepT = clamp(thick / 6.0, 0.0, 1.0);
+    float thick = sceneD > 0.998 ? 12.0 : max(linearDepth(sceneD) - linearDepth(gl_FragCoord.z), 0.0);
 
-    float cau = sin(vWorld.x * 5.4 + uTime * 1.3) * sin(vWorld.z * 4.6 - uTime * 1.05);
-    cau += sin((vWorld.x + vWorld.z) * 3.1 - uTime * 0.7);
-    float cauMul = mix(clamp(0.72 + cau * 0.22, 0.45, 1.25), 1.0, deepT);
-    vec3 floorCol = texture(uScene, refr).rgb * cauMul;
+    vec3 L = normalize(uSunDir);
+    vec3 H = normalize(L + view);
+    float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(H, view), 0.0), 5.0);
 
-    vec3 absorb = exp(-thick * vec3(0.16, 0.05, 0.03));
-    vec3 fog = mix(vec3(0.02, 0.48, 0.52), vec3(0.01, 0.10, 0.28), deepT);
-    fog = mix(fog, vec3(0.005, 0.04, 0.14), clamp((thick - 5.0) / 9.0, 0.0, 1.0));
-    vec3 transmitted = floorCol * absorb + fog * (1.0 - absorb);
+    vec3 refr = mix(texture(uScene, texCoordRefract).rgb, vec3(0.168, 0.267, 0.255), 0.88);
+    vec3 sky = uSky * vec3(0.78, 0.90, 1.0);
+    vec3 reflHit = texture(uScene, texCoordReflect).rgb;
+    vec3 refl = mix(sky, reflHit, 0.5);
+    vec3 col = mix(sky, refl, 0.5);
+    col = mix(refr, col, clamp(fresnel, 0.0, 1.0));
+    col += vec3(1.0) * (20.0 * uSunAmt) * max(pow(max(dot(n, H), 0.0), 300.0), 0.0);
 
-    vec3 reflDir = reflect(-view, n);
-    vec2 hitUv = uv;
-    bool found = false;
-    vec3 pos = vWorld + n * 0.06;
-    for (int i = 0; i < 5; ++i) {
-        pos += reflDir * (0.7 + float(i) * 0.55);
-        vec4 clip = uViewProj * vec4(pos, 1.0);
-        if (clip.w <= 0.0) break;
-        vec3 ndc = clip.xyz / clip.w;
-        vec2 ruv = ndc.xy * 0.5 + 0.5;
-        if (ruv.x < 0.0 || ruv.y < 0.0 || ruv.x > 1.0 || ruv.y > 1.0) break;
-        float hitD = texture(uDepth, ruv).r;
-        float rayD = ndc.z * 0.5 + 0.5;
-        if (hitD + 0.002 < rayD && hitD < 0.998) {
-            hitUv = ruv;
-            found = true;
-            break;
-        }
-    }
-    vec3 reflected = found ? texture(uScene, hitUv).rgb : uSky * vec3(0.78, 0.9, 1.0);
-    float ndv = max(dot(n, view), 0.0);
-    float fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
-    vec3 col = mix(transmitted, reflected, fres * 0.9);
-    float spec = pow(max(dot(reflDir, normalize(uSunDir)), 0.0), 140.0);
-    col += vec3(1.0, 0.98, 0.92) * spec * uSunAmt * fres;
+    float foam = clamp(vFlow.w, 0.0, 1.0);
+    foam = clamp(foam + abs(texture(uRipple, (vWorld.xz - uHeightOrigin) / uWorld).r) * 2.5, 0.0, 1.0);
+    col = mix(col, vec3(0.90, 0.97, 1.0), foam * 0.35);
+    col += waterGodRays(vWorld, n, thick);
+    float fog = smoothstep(118.0, 168.0, length(vWorld.xz - uCam.xz));
+    col = mix(col, uSky, fog);
     fragColor = vec4(col, 1.0);
 }
 )GLSL";
@@ -356,6 +409,11 @@ void bindOpaqueShader(const DayNightLighting& light, float time) {
     glx.Uniform3f(loc("uSky"), light.skyColor.x, light.skyColor.y, light.skyColor.z);
     glx.Uniform1f(loc("uTime"), time);
     glx.Uniform1f(loc("uSunAmt"), light.sunIntensity);
+    glm::vec3 pp = cameraPosition();
+    glm::vec3 pv = cameraVelocity();
+    glx.Uniform3f(loc("uPlayer"), pp.x, pp.y, pp.z);
+    glx.Uniform2f(loc("uPlayerVel"), pv.x, pv.z);
+    glx.Uniform3f(loc("uCam"), pp.x, pp.y, pp.z);
     glx.Uniform1i(loc("uShadowMap"), 0);
     glx.Uniform1i(loc("uAlbedo"), 1);
     glx.UniformMatrix4fv(loc("uShadowMat"), 1, GL_FALSE, glm::value_ptr(gShadowMat));
@@ -378,9 +436,19 @@ void bindWaterShader(const glm::mat4& viewProj, const glm::vec3& camPos, const g
     glx.Uniform1i(loc("uDepth"), 3);
     glx.Uniform1i(loc("uRipple"), 5);
     glx.Uniform1i(loc("uHeight"), 4);
+    glx.Uniform1i(loc("uFft"), 7);
+    glx.Uniform1i(loc("uShadowMap"), 6);
     glx.Uniform1f(loc("uWorld"), fluidRippleWorldSize());
+    float ox = 0.0f, oz = 0.0f;
+    fluidHeightOrigin(ox, oz);
+    glx.Uniform2f(loc("uHeightOrigin"), ox, oz);
+    glx.UniformMatrix4fv(loc("uShadowMat"), 1, GL_FALSE, glm::value_ptr(gShadowMat));
     fluidBindHeight(4);
     fluidBindRipple(5);
+    fluidBindFft(7);
+    glx.ActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_2D, gShadowTex);
+    glx.ActiveTexture(GL_TEXTURE0);
 }
 
 void bindFixedPipeline() {
