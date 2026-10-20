@@ -43,6 +43,7 @@ void worldSetSeed(unsigned seed);
 unsigned worldGetSeed();
 void worldBindSave(const char* worldId);
 void worldSaveEdits();
+void worldServiceSaves(double now);
 void worldReset();
 void initializeWorld();
 int worldStreamAround(float x, float z);

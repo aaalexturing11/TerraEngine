@@ -158,6 +158,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
                 gameMenuSaveProgress();
                 nextWorldSave = frameStart + 8.0;
             }
+            worldServiceSaves(frameStart);
             cameraUpdateMovement(window, !uiOpen, (float)(frameStart - lastFrameTime));
             generated = worldStreamAround((float)camX, (float)camZ);
             setMeshBudget(1);
@@ -204,8 +205,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         if (inWorld) {
             glLoadIdentity();
             glm::vec3 bob = cameraBobOffset();
+            glm::vec3 viewLook = cameraViewDirection();
             gluLookAt(camX + bob.x, camY + bob.y, camZ + bob.z,
-                camX + lookX + bob.x, camY + lookY + bob.y, camZ + lookZ + bob.z, 0, 1, 0);
+                camX + bob.x + viewLook.x, camY + bob.y + viewLook.y, camZ + bob.z + viewLook.z, 0, 1, 0);
 
             glm::vec3 viewDir = cameraLookDirection();
             glDepthMask(GL_FALSE);
@@ -236,7 +238,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         float sceneAspect = sceneH > 0 ? (float)sceneW / (float)sceneH : 1.0f;
         glm::vec3 eye = cameraPosition() + cameraBobOffset();
         glm::mat4 proj = glm::perspective(glm::radians(cameraFov()), sceneAspect, 0.12f, 360.0f);
-        glm::mat4 view = glm::lookAt(eye, eye + cameraLookDirection(), glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::mat4 view = glm::lookAt(eye, eye + cameraViewDirection(), glm::vec3(0.0f, 1.0f, 0.0f));
         glm::mat4 viewProj = proj * view;
         bindWaterShader(viewProj, cameraPosition(), light.skyColor, light.sunDir, light.sunIntensity, time);
         renderWaterBlocks(renderRadiusXZ, renderMaxY);

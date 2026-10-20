@@ -19,7 +19,7 @@ void updateSelectedBlock(GLFWwindow* window) {
     if (h == 0) return;
 
     glm::mat4 proj = glm::perspective(glm::radians(60.0f), (float)w / (float)h, 0.1f, 250.0f);
-    glm::mat4 view = glm::lookAt(camPos, camPos + cameraLookDirection(), glm::vec3(0, 1, 0));
+    glm::mat4 view = glm::lookAt(camPos, camPos + cameraViewDirection(), glm::vec3(0, 1, 0));
 
     float cx = w / 2.0f, cy = h / 2.0f;
     glm::vec3 nearPoint = glm::unProject(glm::vec3(cx, cy, 0.0f), view, proj, glm::vec4(0, 0, w, h));

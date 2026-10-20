@@ -20,6 +20,9 @@ static float viewFov = 60.0f;
 static glm::vec2 bobDir(0.0f, -1.0f);
 static glm::vec3 bobSmoothed(0.0f);
 static glm::vec3 bobOffset(0.0f);
+static glm::vec3 lookSway(0.0f);
+static glm::vec3 lookSwaySmoothed(0.0f);
+static float idleTime = 0.0f;
 
 void cameraResetMouse() {
     firstMouse = true;
@@ -335,59 +338,63 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
     }
     camY = (double)feet + (double)kEye;
 
+    idleTime += dt;
     float moved = std::sqrt(wish.x * wish.x + wish.z * wish.z) * dt;
     bool stepping = grounded && !flying && !wet && moved > 0.002f;
     const float tau = 6.2831853f;
     if (stepping) {
-        stepPhase += dt * ((speed > 6.0f) ? 12.0f : 8.2f);
+        stepPhase += dt * ((speed > 6.0f) ? 13.5f : 9.0f);
         if (stepPhase > tau) stepPhase -= tau;
         glm::vec2 dir(wish.x, wish.z);
         float dl = std::sqrt(dir.x * dir.x + dir.y * dir.y);
         if (dl > 0.001f) {
             dir /= dl;
-            float follow = 1.0f - std::exp(-dt * 6.0f);
+            float follow = 1.0f - std::exp(-dt * 8.0f);
             bobDir += (dir - bobDir) * follow;
             float bl = std::sqrt(bobDir.x * bobDir.x + bobDir.y * bobDir.y);
             if (bl > 0.001f) bobDir /= bl;
         }
     }
-    else {
-        float p = stepPhase;
-        if (p > tau * 0.5f) p -= tau;
-        p *= std::exp(-dt * 10.0f);
-        if (p < 0.0f) p += tau;
-        stepPhase = p;
-    }
-    float targetBob = stepping ? (wet ? 0.22f : 1.0f) : 0.0f;
-    float blendRate = stepping ? 6.0f : 14.0f;
+    float targetBob = stepping ? (speed > 6.0f ? 1.15f : 0.72f) : 0.0f;
+    float blendRate = stepping ? 7.0f : 4.0f;
     bobBlend += (targetBob - bobBlend) * (1.0f - std::exp(-dt * blendRate));
-    if (bobBlend < 0.01f) bobBlend = 0.0f;
+    if (bobBlend < 0.001f) bobBlend = 0.0f;
+    if (bobBlend > 1.0f) bobBlend = 1.0f;
+    float still = 1.0f - bobBlend;
+    float calm = wet ? 0.4f : (flying ? 0.55f : 1.0f);
     landDip *= std::exp(-dt * 8.0f);
     float hopWave = std::sin(stepPhase);
-    float hop = hopWave * hopWave * 0.04f * bobBlend;
-    float sway = hopWave * 0.016f * bobBlend;
+    float hop = hopWave * hopWave * 0.058f * bobBlend;
+    float sway = hopWave * 0.032f * bobBlend;
+    float surge = std::sin(stepPhase) * 0.02f * bobBlend;
     if (!grounded && !flying && !wet) {
         float drop = -bodyVy;
         if (drop > 10.0f) drop = 10.0f;
         if (drop < 0.0f) drop = 0.0f;
-        hop += drop * 0.003f;
+        hop += drop * 0.004f;
     }
+    float breathe = std::sin(idleTime * 1.55f) * 0.016f * calm;
+    float idleSide = std::sin(idleTime * 0.72f) * 0.012f * calm;
     glm::vec3 side(-bobDir.y, 0.0f, bobDir.x);
-    glm::vec3 targetBobPos = side * sway + glm::vec3(0.0f, hop - landDip * 0.05f, 0.0f);
-    if (!stepping && grounded) {
-        targetBobPos = glm::vec3(0.0f);
-        if (landDip < 0.02f) {
-            bobBlend = 0.0f;
-            stepPhase = 0.0f;
-            bobSmoothed = glm::vec3(0.0f);
-            bobOffset = glm::vec3(0.0f);
-        }
-    }
-    if (bobOffset != glm::vec3(0.0f) || targetBobPos != glm::vec3(0.0f)) {
-        bobSmoothed += (targetBobPos - bobSmoothed) * (1.0f - std::exp(-dt * 16.0f));
-        if (glm::dot(bobSmoothed, bobSmoothed) < 1.0e-8f) bobSmoothed = glm::vec3(0.0f);
-        bobOffset = bobSmoothed;
-    }
+    glm::vec3 fwd(bobDir.x, 0.0f, bobDir.y);
+    glm::vec3 targetBobPos = side * (sway + idleSide * still) + fwd * surge
+        + glm::vec3(0.0f, hop - landDip * 0.07f + breathe * (0.35f + 0.65f * still), 0.0f);
+    bobSmoothed += (targetBobPos - bobSmoothed) * (1.0f - std::exp(-dt * 14.0f));
+    if (glm::dot(bobSmoothed, bobSmoothed) < 1.0e-8f) bobSmoothed = glm::vec3(0.0f);
+    bobOffset = bobSmoothed;
+
+    glm::vec3 look((float)lookX, (float)lookY, (float)lookZ);
+    glm::vec3 worldUp(0.0f, 1.0f, 0.0f);
+    glm::vec3 lookRight = glm::cross(look, worldUp);
+    float rl = glm::length(lookRight);
+    if (rl > 0.001f) lookRight /= rl;
+    else lookRight = glm::vec3(1.0f, 0.0f, 0.0f);
+    glm::vec3 camUp = glm::cross(lookRight, look);
+    float lookYaw = std::sin(stepPhase) * 0.045f * bobBlend + std::sin(idleTime * 0.68f) * 0.016f * still * calm;
+    float lookPitch = std::cos(stepPhase * 2.0f) * 0.022f * bobBlend + std::sin(idleTime * 1.12f) * 0.01f * still * calm;
+    glm::vec3 targetSway = lookRight * lookYaw + camUp * lookPitch;
+    lookSwaySmoothed += (targetSway - lookSwaySmoothed) * (1.0f - std::exp(-dt * 10.0f));
+    lookSway = lookSwaySmoothed;
 
     float targetFov = 60.0f;
     if (flying) targetFov = 66.0f;
@@ -397,6 +404,14 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
 }
 
 glm::vec3 cameraBobOffset() { return bobOffset; }
+
+glm::vec3 cameraViewDirection() {
+    glm::vec3 look((float)lookX, (float)lookY, (float)lookZ);
+    glm::vec3 dir = look + lookSway;
+    float len = glm::length(dir);
+    if (len < 0.001f) return look;
+    return dir / len;
+}
 float cameraFov() { return viewFov; }
 
 bool cameraEyesInWater() {

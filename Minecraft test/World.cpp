@@ -68,6 +68,7 @@ static int cidx(int lx, int y, int lz) {
 struct Chunk {
     int cx = 0, cz = 0;
     bool edited = false;
+    bool saveDirty = false;
     Block vol[CHUNK * CHUNK * HEIGHT];
     unsigned char meta[CHUNK * CHUNK * HEIGHT];
     unsigned char sky[CHUNK * CHUNK * HEIGHT];
@@ -445,6 +446,9 @@ static bool skyPassable(Block b) {
     return !(blockInfo(b).blocksSky && b != Block::Lava);
 }
 
+static int skyEmit(int level, Block b);
+static int lampEmit(int level, Block b);
+
 static void spreadLight(int x0, int y0, int z0, int x1, int y1, int z1) {
     struct Node { int x, y, z; };
     std::vector<Node> skyQ;
@@ -453,6 +457,31 @@ static void spreadLight(int x0, int y0, int z0, int x1, int y1, int z1) {
     lampQ.reserve(512);
     auto inside = [&](int x, int y, int z) {
         return x >= x0 && x <= x1 && y >= y0 && y <= y1 && z >= z0 && z <= z1;
+    };
+    auto darkerInside = [&](Chunk* home, int lx, int y, int lz, int give, bool lamp) -> bool {
+        if (give <= (lamp ? 8 : 0)) return false;
+        int wx = home->cx * CHUNK + lx;
+        int wz = home->cz * CHUNK + lz;
+        for (int d = 0; d < 6; ++d) {
+            int nlx = lx + kDir[d][0], ny = y + kDir[d][1], nlz = lz + kDir[d][2];
+            int nx = wx + kDir[d][0], nz = wz + kDir[d][2];
+            if (!inside(nx, ny, nz)) continue;
+            Block nb;
+            int have;
+            if ((unsigned)nlx < (unsigned)CHUNK && (unsigned)nlz < (unsigned)CHUNK && (unsigned)ny < (unsigned)HEIGHT) {
+                int ni = cidx(nlx, ny, nlz);
+                nb = home->vol[ni];
+                have = lamp ? (int)home->lamp[ni] : (int)home->sky[ni];
+            }
+            else {
+                if (!inBounds(nx, ny, nz)) continue;
+                nb = getB(nx, ny, nz);
+                have = lamp ? (int)refLamp(nx, ny, nz) : (int)refSky(nx, ny, nz);
+            }
+            if (!skyPassable(nb)) continue;
+            if (give > have) return true;
+        }
+        return false;
     };
     int cx0 = divFloor(x0 - 1, CHUNK), cx1 = divFloor(x1 + 1, CHUNK);
     int cz0 = divFloor(z0 - 1, CHUNK), cz1 = divFloor(z1 + 1, CHUNK);
@@ -471,8 +500,12 @@ static void spreadLight(int x0, int y0, int z0, int x1, int y1, int z1) {
                         int i = cidx(lx, y, lz);
                         Block b = c->vol[i];
                         if (!skyPassable(b)) continue;
-                        if ((int)c->sky[i] > kSkyStep) skyQ.push_back({ wx, y, wz });
-                        if (c->lamp[i] > 8) lampQ.push_back({ wx, y, wz });
+                        int sky = c->sky[i];
+                        if (sky > kSkyStep && darkerInside(c, lx, y, lz, skyEmit(sky, b), false))
+                            skyQ.push_back({ wx, y, wz });
+                        int lamp = c->lamp[i];
+                        if (lamp > 8 && darkerInside(c, lx, y, lz, lampEmit(lamp, b), true))
+                            lampQ.push_back({ wx, y, wz });
                     }
                 }
         }
@@ -510,12 +543,172 @@ static void spreadLight(int x0, int y0, int z0, int x1, int y1, int z1) {
     }
 }
 
-static void relightRegion(int x, int y, int z) {
+static int skyEmit(int level, Block b) {
+    int give = level - kSkyStep;
+    if (b == Block::Water) give -= 10;
+    else if (b == Block::Leaves) give -= 8;
+    return give > 0 ? give : 0;
+}
+
+static int lampEmit(int level, Block b) {
+    int give = level * 64 / 100;
+    if (b == Block::Water) give = give * 9 / 10;
+    return give;
+}
+
+static void relightRegionWide(int x, int y, int z) {
     const int r = kSkyRadius;
     for (int ix = x - r; ix <= x + r; ++ix)
         for (int iz = z - r; iz <= z + r; ++iz)
             verticalColumn(ix, iz);
     spreadLight(x - r, 0, z - r, x + r, HEIGHT - 1, z + r);
+}
+
+static bool relightEdit(int x, int y, int z, Block previous, int& x0, int& y0, int& z0, int& x1, int& y1, int& z1) {
+    x0 = x1 = x;
+    y0 = y1 = y;
+    z0 = z1 = z;
+    if (!inBounds(x, 0, z)) return false;
+    unsigned char oldSky[HEIGHT];
+    unsigned char oldLamp[HEIGHT];
+    for (int iy = 0; iy < HEIGHT; ++iy) {
+        oldSky[iy] = refSky(x, iy, z);
+        oldLamp[iy] = refLamp(x, iy, z);
+    }
+    verticalColumn(x, z);
+
+    struct Node { int x, y, z, level; };
+    std::vector<Node> remS, addS, remL, addL;
+    remS.reserve(256);
+    addS.reserve(256);
+    remL.reserve(64);
+    addL.reserve(64);
+    auto touch = [&](int ax, int ay, int az) {
+        if (ax < x0) x0 = ax;
+        if (ay < y0) y0 = ay;
+        if (az < z0) z0 = az;
+        if (ax > x1) x1 = ax;
+        if (ay > y1) y1 = ay;
+        if (az > z1) z1 = az;
+    };
+    for (int iy = 0; iy < HEIGHT; ++iy) {
+        int ns = refSky(x, iy, z);
+        int nl = refLamp(x, iy, z);
+        if (ns < (int)oldSky[iy]) remS.push_back({ x, iy, z, (int)oldSky[iy] });
+        else if (ns > (int)oldSky[iy]) addS.push_back({ x, iy, z, ns });
+        if (nl < (int)oldLamp[iy]) remL.push_back({ x, iy, z, (int)oldLamp[iy] });
+        else if (nl > (int)oldLamp[iy]) addL.push_back({ x, iy, z, nl });
+    }
+
+    int steps = 0;
+    for (size_t head = 0; head < remS.size(); ++head) {
+        if (++steps > 90000) return false;
+        Node n = remS[head];
+        Block src = (n.x == x && n.y == y && n.z == z) ? previous : getB(n.x, n.y, n.z);
+        int give = skyEmit(n.level, src);
+        for (int d = 0; d < 6; ++d) {
+            int nx = n.x + kDir[d][0], ny = n.y + kDir[d][1], nz = n.z + kDir[d][2];
+            if (!inBounds(nx, ny, nz) || !skyPassable(getB(nx, ny, nz))) continue;
+            int nl = refSky(nx, ny, nz);
+            if (nl > 0 && nl <= give) {
+                refSky(nx, ny, nz) = 0;
+                remS.push_back({ nx, ny, nz, nl });
+                touch(nx, ny, nz);
+            }
+            else if (nl > give)
+                addS.push_back({ nx, ny, nz, nl });
+        }
+    }
+    auto pullSky = [&](int ax, int ay, int az) {
+        if (!inBounds(ax, ay, az) || !skyPassable(getB(ax, ay, az))) return;
+        int best = refSky(ax, ay, az);
+        for (int d = 0; d < 6; ++d) {
+            int nx = ax + kDir[d][0], ny = ay + kDir[d][1], nz = az + kDir[d][2];
+            if (!inBounds(nx, ny, nz) || !skyPassable(getB(nx, ny, nz))) continue;
+            int g = skyEmit(refSky(nx, ny, nz), getB(nx, ny, nz));
+            if (g > best) best = g;
+        }
+        if (best > (int)refSky(ax, ay, az)) {
+            refSky(ax, ay, az) = (unsigned char)best;
+            addS.push_back({ ax, ay, az, best });
+            touch(ax, ay, az);
+        }
+    };
+    bool opened = skyPassable(getB(x, y, z)) && !skyPassable(previous);
+    for (int iy = 0; iy < HEIGHT; ++iy) {
+        if (opened && iy == y) pullSky(x, y, z);
+        else if ((int)refSky(x, iy, z) < (int)oldSky[iy]) pullSky(x, iy, z);
+    }
+    for (size_t head = 0; head < addS.size(); ++head) {
+        if (++steps > 90000) return false;
+        Node n = addS[head];
+        if (!inBounds(n.x, n.y, n.z) || !skyPassable(getB(n.x, n.y, n.z))) continue;
+        int give = skyEmit(refSky(n.x, n.y, n.z), getB(n.x, n.y, n.z));
+        if (give <= 0) continue;
+        for (int d = 0; d < 6; ++d) {
+            int nx = n.x + kDir[d][0], ny = n.y + kDir[d][1], nz = n.z + kDir[d][2];
+            if (!inBounds(nx, ny, nz) || !skyPassable(getB(nx, ny, nz))) continue;
+            if (give > (int)refSky(nx, ny, nz)) {
+                refSky(nx, ny, nz) = (unsigned char)give;
+                addS.push_back({ nx, ny, nz, give });
+                touch(nx, ny, nz);
+            }
+        }
+    }
+    for (size_t head = 0; head < remL.size(); ++head) {
+        if (++steps > 90000) return false;
+        Node n = remL[head];
+        Block src = (n.x == x && n.y == y && n.z == z) ? previous : getB(n.x, n.y, n.z);
+        int give = lampEmit(n.level, src);
+        for (int d = 0; d < 6; ++d) {
+            int nx = n.x + kDir[d][0], ny = n.y + kDir[d][1], nz = n.z + kDir[d][2];
+            if (!inBounds(nx, ny, nz) || !skyPassable(getB(nx, ny, nz))) continue;
+            int nl = refLamp(nx, ny, nz);
+            if (nl > 0 && nl <= give) {
+                refLamp(nx, ny, nz) = 0;
+                remL.push_back({ nx, ny, nz, nl });
+                touch(nx, ny, nz);
+            }
+            else if (nl > give)
+                addL.push_back({ nx, ny, nz, nl });
+        }
+    }
+    auto pullLamp = [&](int ax, int ay, int az) {
+        if (!inBounds(ax, ay, az) || !skyPassable(getB(ax, ay, az))) return;
+        int best = refLamp(ax, ay, az);
+        for (int d = 0; d < 6; ++d) {
+            int nx = ax + kDir[d][0], ny = ay + kDir[d][1], nz = az + kDir[d][2];
+            if (!inBounds(nx, ny, nz) || !skyPassable(getB(nx, ny, nz))) continue;
+            int g = lampEmit(refLamp(nx, ny, nz), getB(nx, ny, nz));
+            if (g > best) best = g;
+        }
+        if (best > (int)refLamp(ax, ay, az)) {
+            refLamp(ax, ay, az) = (unsigned char)best;
+            addL.push_back({ ax, ay, az, best });
+            touch(ax, ay, az);
+        }
+    };
+    for (int iy = 0; iy < HEIGHT; ++iy) {
+        if (opened && iy == y) pullLamp(x, y, z);
+        else if ((int)refLamp(x, iy, z) < (int)oldLamp[iy]) pullLamp(x, iy, z);
+    }
+    for (size_t head = 0; head < addL.size(); ++head) {
+        if (++steps > 90000) return false;
+        Node n = addL[head];
+        if (!inBounds(n.x, n.y, n.z) || !skyPassable(getB(n.x, n.y, n.z))) continue;
+        int give = lampEmit(refLamp(n.x, n.y, n.z), getB(n.x, n.y, n.z));
+        if (give <= 8) continue;
+        for (int d = 0; d < 6; ++d) {
+            int nx = n.x + kDir[d][0], ny = n.y + kDir[d][1], nz = n.z + kDir[d][2];
+            if (!inBounds(nx, ny, nz) || !skyPassable(getB(nx, ny, nz))) continue;
+            if (give > (int)refLamp(nx, ny, nz)) {
+                refLamp(nx, ny, nz) = (unsigned char)give;
+                addL.push_back({ nx, ny, nz, give });
+                touch(nx, ny, nz);
+            }
+        }
+    }
+    return true;
 }
 
 static void placeInChunk(Chunk* c, int wx, int y, int wz, Block b) {
@@ -1209,8 +1402,21 @@ static bool loadEditedChunk(Chunk* c) {
     return ok;
 }
 
+static bool gSavePending = false;
+
+void worldServiceSaves(double now) {
+    static double due = -1.0;
+    if (gSavePending) {
+        due = now + 0.45;
+        gSavePending = false;
+    }
+    if (due < 0.0 || now < due) return;
+    due = -1.0;
+    worldSaveEdits();
+}
+
 static void saveChunkFile(Chunk* c) {
-    if (!c || !c->edited || !gSaveId[0]) return;
+    if (!c || !c->edited || !c->saveDirty || !gSaveId[0]) return;
     char path[220];
     editPath(path, (int)sizeof(path), c->cx, c->cz);
     FILE* f = nullptr;
@@ -1231,6 +1437,7 @@ static void saveChunkFile(Chunk* c) {
     std::fwrite(c->lamp, 1, kVolN, f);
     std::fflush(f);
     std::fclose(f);
+    c->saveDirty = false;
 }
 
 void worldSaveEdits() {
@@ -1320,6 +1527,8 @@ static bool placeFlow(int x, int y, int z, int lv) {
     c->fill[i] = 6;
     c->meta[i] = 0;
     c->edited = true;
+    c->saveDirty = true;
+    gSavePending = true;
     rememberWater(x, y, z);
     resolveFluidContact(x, y, z);
     return true;
@@ -1339,7 +1548,10 @@ static float addFillTo(int x, int y, int z, float amount, int lv, bool& changed)
     if (room <= 0.0f) return 0.0f;
     if (amount > room) amount = room;
     refFill(x, y, z) = (unsigned char)(have + amount + 0.5f);
-    chunkOf(x, z)->edited = true;
+    Chunk* editedChunk = chunkOf(x, z);
+    editedChunk->edited = true;
+    editedChunk->saveDirty = true;
+    gSavePending = true;
     return amount;
 }
 
@@ -1655,11 +1867,21 @@ void setBlock(int x, int y, int z, Block value, int meta) {
         for (int ox = -1; ox <= 1; ++ox)
             for (int oy = -1; oy <= 1; ++oy)
                 expandSpan(x + ox, z + oz, y + oy);
-    relightRegion(x, y, z);
-    markMeshArea(x - kSkyRadius, z - kSkyRadius, x + kSkyRadius, z + kSkyRadius);
+    int lx0, ly0, lz0, lx1, ly1, lz1;
+    if (!relightEdit(x, y, z, old, lx0, ly0, lz0, lx1, ly1, lz1)) {
+        relightRegionWide(x, y, z);
+        lx0 = x - kSkyRadius; lx1 = x + kSkyRadius;
+        lz0 = z - kSkyRadius; lz1 = z + kSkyRadius;
+    }
+    if (lx0 > x - 1) lx0 = x - 1;
+    if (lx1 < x + 1) lx1 = x + 1;
+    if (lz0 > z - 1) lz0 = z - 1;
+    if (lz1 < z + 1) lz1 = z + 1;
+    markMeshArea(lx0, lz0, lx1, lz1);
+    c->saveDirty = true;
+    gSavePending = true;
     if (!gReacting)
         resolveFluidContact(x, y, z);
-    saveChunkFile(c);
 }
 
 int waterLevelAt(int x, int y, int z) {
