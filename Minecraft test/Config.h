@@ -4,6 +4,7 @@ constexpr int CHUNK = 16;
 constexpr int HEIGHT = 256;
 constexpr int SEA_LEVEL = 48;
 constexpr int LOAD_RADIUS = 8;
+constexpr int STREAM_RADIUS = LOAD_RADIUS + 2;
 
 constexpr float PI = 3.14159265358979323846f;
 

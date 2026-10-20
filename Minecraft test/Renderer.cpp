@@ -669,9 +669,7 @@ static void updateWorldMeshes() {
     }
     std::sort(jobs.begin(), jobs.end(), [](const Job& a, const Job& b) { return a.d < b.d; });
     int cap = gMeshBudget;
-    int pending = (int)gPending.size();
-    if (cap > 0 && pending > 12) cap = 4;
-    else if (cap > 0 && pending > 4) cap = 2;
+    if (cap > 1) cap = 1;
     if (cap < 1 && !jobs.empty() && jobs[0].d <= 1) cap = 1;
     int built = 0;
     for (size_t i = 0; i < jobs.size() && built < cap; ++i) {

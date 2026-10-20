@@ -154,7 +154,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         if (inWorld) {
             cameraUpdateMovement(window, !uiOpen, (float)(frameStart - lastFrameTime));
             generated = worldStreamAround((float)camX, (float)camZ);
-            setMeshBudget(generated > 0 ? 0 : 1);
+            setMeshBudget(1);
             fluidSetHeavy(generated == 0);
             fluidSetView((float)camX, (float)camZ);
             if (!uiOpen) {

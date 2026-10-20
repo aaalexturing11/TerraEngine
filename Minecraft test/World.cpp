@@ -240,16 +240,71 @@ struct ColGen {
     bool ocean, lake, beach, mountain, forest;
 };
 
+struct Climate {
+    float cont, range, ridge, hill, sea, moist, ox, oz;
+};
+
+static Climate climatePoint(int x, int z) {
+    Climate c;
+    noisePos(x, z, c.ox, c.oz);
+    c.cont = fbm(c.ox * 0.00125f, c.oz * 0.00125f, 11, 4);
+    c.range = fbm(c.ox * 0.00105f, c.oz * 0.00105f, 29, 3);
+    c.ridge = 1.0f - std::abs(fbm(c.ox * 0.0054f, c.oz * 0.0041f, 47, 3));
+    c.hill = fbm(c.ox * 0.0088f, c.oz * 0.0088f, 73, 3);
+    c.sea = fbm(c.ox * 0.00082f, c.oz * 0.00082f, 211, 3);
+    c.moist = fbm(c.ox * 0.0044f + 18.0f, c.oz * 0.0044f, 131, 2);
+    return c;
+}
+
+static Climate climateAt(int x, int z) {
+    int x0 = divFloor(x, 4) * 4;
+    int z0 = divFloor(z, 4) * 4;
+    struct Slot { int x, z; Climate c; bool ok; };
+    static Slot slots[128];
+    auto cached = [&](int sx, int sz) {
+        unsigned h = ((unsigned)sx * 73856093u) ^ ((unsigned)sz * 19349663u);
+        Slot& s = slots[h & 127u];
+        if (!s.ok || s.x != sx || s.z != sz) {
+            s.ok = true;
+            s.x = sx;
+            s.z = sz;
+            s.c = climatePoint(sx, sz);
+        }
+        return s.c;
+    };
+    Climate c00 = cached(x0, z0);
+    Climate c10 = cached(x0 + 4, z0);
+    Climate c01 = cached(x0, z0 + 4);
+    Climate c11 = cached(x0 + 4, z0 + 4);
+    float tx = (float)(x - x0) * 0.25f;
+    float tz = (float)(z - z0) * 0.25f;
+    auto mix4 = [&](float a, float b, float c, float d) {
+        float ab = a * (1.0f - tx) + b * tx;
+        float cd = c * (1.0f - tx) + d * tx;
+        return ab * (1.0f - tz) + cd * tz;
+    };
+    Climate o;
+    o.cont = mix4(c00.cont, c10.cont, c01.cont, c11.cont);
+    o.range = mix4(c00.range, c10.range, c01.range, c11.range);
+    o.ridge = mix4(c00.ridge, c10.ridge, c01.ridge, c11.ridge);
+    o.hill = mix4(c00.hill, c10.hill, c01.hill, c11.hill);
+    o.sea = mix4(c00.sea, c10.sea, c01.sea, c11.sea);
+    o.moist = mix4(c00.moist, c10.moist, c01.moist, c11.moist);
+    o.ox = mix4(c00.ox, c10.ox, c01.ox, c11.ox);
+    o.oz = mix4(c00.oz, c10.oz, c01.oz, c11.oz);
+    return o;
+}
+
 static ColGen columnGen(int x, int z) {
-    float ox, oz;
-    noisePos(x, z, ox, oz);
-    float cont = fbm(ox * 0.00125f, oz * 0.00125f, 11, 4);
-    float range = fbm(ox * 0.00105f, oz * 0.00105f, 29, 3);
-    float ridge = 1.0f - std::abs(fbm(ox * 0.0054f, oz * 0.0041f, 47, 3));
-    float hill = fbm(ox * 0.0088f, oz * 0.0088f, 73, 3);
-    float detail = fbm(ox * 0.031f, oz * 0.031f, 91, 2);
-    float sea = fbm(ox * 0.00082f, oz * 0.00082f, 211, 3);
-    float moist = fbm(ox * 0.0044f + 18.0f, oz * 0.0044f, 131, 2);
+    Climate cl = climateAt(x, z);
+    float cont = cl.cont;
+    float range = cl.range;
+    float ridge = cl.ridge;
+    float hill = cl.hill;
+    float detail = fbm(cl.ox * 0.031f, cl.oz * 0.031f, 91, 2);
+    float sea = cl.sea;
+    float moist = cl.moist;
+    float ox = cl.ox, oz = cl.oz;
     float mt = smooth01((range - 0.16f) / 0.42f) * smooth01((ridge - 0.58f) / 0.28f);
 
     ColGen g;
@@ -461,17 +516,32 @@ static void generateChunk(Chunk* c) {
     unsigned char carveLo[CHUNK * CHUNK];
     for (int i = 0; i < CHUNK * CHUNK; ++i) carveLo[i] = 255;
 
+    constexpr int kPad = 3;
+    constexpr int kSpan = CHUNK + kPad * 2;
+    ColGen span[kSpan][kSpan];
+    int x0 = c->cx * CHUNK - kPad;
+    int z0 = c->cz * CHUNK - kPad;
+    for (int iz = 0; iz < kSpan; ++iz)
+        for (int ix = 0; ix < kSpan; ++ix)
+            span[ix][iz] = columnGen(x0 + ix, z0 + iz);
+    auto col = [&](int wx, int wz) -> ColGen {
+        int ix = wx - x0, iz = wz - z0;
+        if ((unsigned)ix >= (unsigned)kSpan || (unsigned)iz >= (unsigned)kSpan)
+            return columnGen(wx, wz);
+        return span[ix][iz];
+    };
+
     for (int lx = 0; lx < CHUNK; ++lx)
         for (int lz = 0; lz < CHUNK; ++lz) {
             int wx = c->cx * CHUNK + lx;
             int wz = c->cz * CHUNK + lz;
             int ci = lz * CHUNK + lx;
-            ColGen g = columnGen(wx, wz);
+            ColGen g = col(wx, wz);
             colGround[ci] = g.ground;
             colWet[ci] = (g.ocean || g.lake) ? 1 : 0;
             int slope = 0;
-            ColGen gx = columnGen(wx + 1, wz);
-            ColGen gz = columnGen(wx, wz + 1);
+            ColGen gx = col(wx + 1, wz);
+            ColGen gz = col(wx, wz + 1);
             slope = std::abs(gx.ground - g.ground);
             int sz = std::abs(gz.ground - g.ground);
             if (sz > slope) slope = sz;
@@ -506,15 +576,16 @@ static void generateChunk(Chunk* c) {
             int yTop = wet ? ground - 5 : (entrance ? ground : ground - 4);
             if (yTop > HEIGHT - 2) yTop = HEIGHT - 2;
             if (yTop < 6) continue;
-            for (int y = 4; y <= yTop; ++y) {
-                float cheese = valueNoise3((float)wx * 0.045f, (float)y * 0.07f, (float)wz * 0.045f, 301);
-                float tunnel = valueNoise3((float)wx * 0.026f, (float)y * 0.085f, (float)wz * 0.026f, 418);
-                bool cave = cheese > 0.70f || std::abs(tunnel - 0.5f) < 0.048f;
+            for (int y = 4; y <= yTop; y += 2) {
+                float cheese = valueNoise3((float)wx * 0.04f, (float)y * 0.06f, (float)wz * 0.04f, 301);
+                bool cave = cheese > 0.67f;
                 if (!cave) continue;
-                Block cur = c->vol[cidx(lx, y, lz)];
-                if (cur == Block::Air || cur == Block::Water) continue;
-                setVol(c, lx, y, lz, Block::Air);
-                if (y > 0 && (int)carveLo[ci] > y - 1) carveLo[ci] = (unsigned char)(y - 1);
+                for (int yy = y; yy <= y + 1 && yy <= yTop; ++yy) {
+                    Block cur = c->vol[cidx(lx, yy, lz)];
+                    if (cur == Block::Air || cur == Block::Water) continue;
+                    setVol(c, lx, yy, lz, Block::Air);
+                    if (yy > 0 && (int)carveLo[ci] > yy - 1) carveLo[ci] = (unsigned char)(yy - 1);
+                }
             }
         }
 
@@ -560,10 +631,10 @@ static void generateChunk(Chunk* c) {
                         setVol(c, lx + dx, floorY, lz + dz, Block::Water);
         }
 
-    auto treeCandidate = [](int x, int z, int& ground) -> bool {
+    auto treeCandidate = [&](int x, int z, int& ground) -> bool {
         unsigned h = mixHash(x, z, 44);
         if ((int)(h % 1000) > 1000 / 22) return false;
-        ColGen g = columnGen(x, z);
+        ColGen g = col(x, z);
         if (g.ocean || g.lake || g.beach || g.ground < SEA_LEVEL) return false;
         int chance = g.forest ? 22 : (g.mountain ? 90 : 70);
         if ((int)(h % 1000) > 1000 / chance) return false;
@@ -761,7 +832,6 @@ static Chunk* createChunk(int cx, int cz) {
     gLoaded.push_back(c);
     generateChunk(c);
     refreshChunkSurface(c);
-    markWaterMeshDirty();
     markMeshArea(cx * CHUNK, cz * CHUNK, cx * CHUNK + CHUNK - 1, cz * CHUNK + CHUNK - 1);
     markMeshArea((cx - 1) * CHUNK, cz * CHUNK, cx * CHUNK, (cz + 1) * CHUNK - 1);
     markMeshArea((cx + 1) * CHUNK, cz * CHUNK, (cx + 1) * CHUNK + CHUNK - 1, (cz + 1) * CHUNK - 1);
@@ -770,10 +840,10 @@ static Chunk* createChunk(int cx, int cz) {
     return c;
 }
 
-int worldStreamStep(float x, float z, int inner, int budget) {
+int worldStreamStep(float x, float z, int inner, int budget, int radius) {
     int ccx = divFloor((int)std::floor(x), CHUNK);
     int ccz = divFloor((int)std::floor(z), CHUNK);
-    const int R = LOAD_RADIUS;
+    const int R = radius < 1 ? 1 : radius;
     if (inner < 0) inner = 0;
     if (budget < 1) budget = 1;
     struct Miss { int dx, dz, d; };
@@ -802,10 +872,10 @@ int worldStreamStep(float x, float z, int inner, int budget) {
 
 int worldStreamAround(float x, float z) {
     int before = (int)gLoaded.size();
-    worldStreamStep(x, z, 2, 1);
+    worldStreamStep(x, z, 2, 1, STREAM_RADIUS);
     int ccx = divFloor((int)std::floor(x), CHUNK);
     int ccz = divFloor((int)std::floor(z), CHUNK);
-    const int R = LOAD_RADIUS;
+    const int R = STREAM_RADIUS;
     size_t w = 0;
     for (size_t i = 0; i < gLoaded.size(); ++i) {
         Chunk* c = gLoaded[i];
