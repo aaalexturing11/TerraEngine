@@ -50,6 +50,7 @@ bool worldFindSpawn(int& x, int& y, int& z);
 void worldFixSpawn(int& x, int& y, int& z);
 int loadedChunkCount();
 void loadedChunkCoord(int i, int& cx, int& cz);
+void worldColumnSpan(int x, int z, int& y0, int& y1);
 
 void setBlock(int x, int y, int z, Block value, int meta = 0);
 int blockMeta(int x, int y, int z);

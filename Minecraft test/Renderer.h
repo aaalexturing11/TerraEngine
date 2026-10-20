@@ -30,3 +30,4 @@ void renderOpaqueBlocks(int renderRadiusXZ, int renderMaxY);
 void renderWaterBlocks(int renderRadiusXZ, int renderMaxY);
 void clearWorldMeshes();
 int pumpWorldMeshes(int maxBuild);
+void beginFrameMeshes();

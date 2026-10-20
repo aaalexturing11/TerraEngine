@@ -42,7 +42,7 @@ void main() {
     if (d0 > 0.998) { frag = vec4(1.0); return; }
     vec3 p = viewPos(vUv);
     float occ = 0.0;
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < 4; ++i) {
         float a = float(i) * 2.399963;
         vec2 k = vec2(cos(a), sin(a)) * uInvRes * (2.0 + float(i) * 1.35);
         vec2 uv = clamp(vUv + k, 0.0, 1.0);
@@ -50,7 +50,7 @@ void main() {
         if (ds < d0 - 0.00035 && abs(d0 - ds) < 0.018)
             occ += 1.0;
     }
-    float ao = clamp(1.0 - occ * 0.16, 0.28, 1.0);
+    float ao = clamp(1.0 - occ * 0.22, 0.35, 1.0);
     frag = vec4(ao);
 }
 )GLSL";
@@ -62,18 +62,18 @@ out vec4 frag;
 uniform sampler2D uDepth;
 uniform vec2 uSunUv;
 void main() {
-    vec2 delta = (uSunUv - vUv) / 16.0;
+    vec2 delta = (uSunUv - vUv) / 8.0;
     float illum = 0.0;
     vec2 p = vUv;
-    for (int i = 0; i < 16; ++i) {
+    for (int i = 0; i < 8; ++i) {
         p += delta;
         float d = 1.0;
         if (p.x >= 0.0 && p.x <= 1.0 && p.y >= 0.0 && p.y <= 1.0)
             d = texture(uDepth, p).r;
-        float w = 1.0 - float(i) / 16.0;
+        float w = 1.0 - float(i) / 8.0;
         illum += ((d > 0.997) ? 1.0 : 0.1) * w;
     }
-    illum /= 8.0;
+    illum /= 4.0;
     float dist = length(uSunUv - vUv);
     illum *= exp(-max(dist - 0.25, 0.0) * 0.42);
     frag = vec4(illum, illum, illum, 1.0);

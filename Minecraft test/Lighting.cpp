@@ -102,8 +102,8 @@ DayNightLighting computeDayNightLighting(double timeSeconds) {
     else if (L.moonPhase == 2 || L.moonPhase == 6) moonAmt = 0.70f;
     L.moonColor = glm::vec3(0.62f, 0.72f, 1.0f) * L.moonIntensity * moonAmt;
 
-    glm::vec3 ambientDay(0.10f, 0.12f, 0.14f);
-    glm::vec3 ambientNight(0.02f, 0.025f, 0.05f);
+    glm::vec3 ambientDay(0.18f, 0.20f, 0.22f);
+    glm::vec3 ambientNight(0.05f, 0.055f, 0.09f);
     L.ambientRGB = ambientNight * nightFactor + ambientDay * L.dayFactor;
 
     glm::vec3 skyBase = nightColor * nightFactor + dayColor * L.dayFactor;
@@ -147,6 +147,8 @@ FaceLight evaluateFace(int bx, int by, int bz, const glm::vec3& normal) {
         f.gi = manualClamp(sampleSkyForFace(bx, by, bz, normal.x, normal.y, normal.z), 0.0f, 1.0f);
         f.blockLight = manualClamp(sampleLampForFace(bx, by, bz, normal.x, normal.y, normal.z), 0.0f, 1.0f);
         f.ao = faceAmbientOcclusion(bx, by, bz, glm::ivec3(normal));
+        if (normal.y > 0.4f && f.gi < 0.62f) f.gi = 0.62f;
+        else if (f.gi < 0.28f) f.gi = 0.28f;
     }
     f.caustic = (b == Block::Grass || b == Block::Dirt || b == Block::Stone) ? causticAmount(bx, by, bz) : 0.0f;
     return f;

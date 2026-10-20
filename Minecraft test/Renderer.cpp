@@ -506,22 +506,34 @@ static void buildChunk(int cx, int cz) {
     gCap = &chunk.opaque;
     gCapWater = nullptr;
     for (int x = x0; x <= x1; ++x)
-        for (int z = z0; z <= z1; ++z)
-            for (int y = 0; y <= kMeshY && y < HEIGHT; ++y)
+        for (int z = z0; z <= z1; ++z) {
+            int yLo = 0, yHi = -1;
+            worldColumnSpan(x, z, yLo, yHi);
+            if (yHi > kMeshY) yHi = kMeshY;
+            for (int y = yLo; y <= yHi; ++y)
                 if (solidBlock(blockAt(x, y, z))) emitBox(x, y, z, 0.5f, true);
+        }
     gCap = &chunk.leaves;
     for (int x = x0; x <= x1; ++x)
-        for (int z = z0; z <= z1; ++z)
-            for (int y = 0; y <= kMeshY && y < HEIGHT; ++y)
+        for (int z = z0; z <= z1; ++z) {
+            int yLo = 0, yHi = -1;
+            worldColumnSpan(x, z, yLo, yHi);
+            if (yHi > kMeshY) yHi = kMeshY;
+            for (int y = yLo; y <= yHi; ++y)
                 if (blockAt(x, y, z) == Block::Leaves) emitBox(x, y, z, 0.5f, true);
+        }
     gCap = &chunk.cutout;
     for (int x = x0; x <= x1; ++x)
-        for (int z = z0; z <= z1; ++z)
-            for (int y = 0; y <= kMeshY && y < HEIGHT; ++y) {
+        for (int z = z0; z <= z1; ++z) {
+            int yLo = 0, yHi = -1;
+            worldColumnSpan(x, z, yLo, yHi);
+            if (yHi > kMeshY) yHi = kMeshY;
+            for (int y = yLo; y <= yHi; ++y) {
                 Block b = blockAt(x, y, z);
                 if (b == Block::Torch) drawTorch(x, y, z);
                 else if (isPlant(b)) drawPlant(x, y, z);
             }
+        }
     gCap = nullptr;
     gCapWater = &chunk.water;
     auto colH = [](int x, int z) {
@@ -553,6 +565,11 @@ static void buildChunk(int cx, int cz) {
         }
     gCapWater = nullptr;
 }
+
+static int gFrame = 0;
+static int gMeshFrame = -1;
+
+void beginFrameMeshes() { ++gFrame; }
 
 static void updateWorldMeshes() {
     int x0 = 0, z0 = 0, x1 = 0, z1 = 0;
@@ -688,8 +705,14 @@ int pumpWorldMeshes(int maxBuild) {
     return (int)miss.size() - built;
 }
 
-void renderShadowCasters(int renderRadiusXZ, int) {
+static void ensureMeshes() {
+    if (gMeshFrame == gFrame) return;
+    gMeshFrame = gFrame;
     updateWorldMeshes();
+}
+
+void renderShadowCasters(int renderRadiusXZ, int) {
+    ensureMeshes();
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     for (auto it = gMeshes.begin(); it != gMeshes.end(); ++it)
@@ -699,7 +722,7 @@ void renderShadowCasters(int renderRadiusXZ, int) {
 }
 
 void renderOpaqueBlocks(int renderRadiusXZ, int) {
-    updateWorldMeshes();
+    ensureMeshes();
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     for (auto it = gMeshes.begin(); it != gMeshes.end(); ++it) {
@@ -719,7 +742,7 @@ void renderOpaqueBlocks(int renderRadiusXZ, int) {
 }
 
 void renderWaterBlocks(int renderRadiusXZ, int) {
-    updateWorldMeshes();
+    ensureMeshes();
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_TRUE);

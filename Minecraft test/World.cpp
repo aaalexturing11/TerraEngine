@@ -75,6 +75,8 @@ struct Chunk {
     float surf[CHUNK * CHUNK];
     float surfTmp[CHUNK * CHUNK];
     unsigned char mark[CHUNK * CHUNK];
+    unsigned char vis0[CHUNK * CHUNK];
+    unsigned char vis1[CHUNK * CHUNK];
     bool surfDirty = true;
 };
 
@@ -136,6 +138,15 @@ void loadedChunkCoord(int i, int& cx, int& cz) {
     if (i < 0 || i >= (int)gLoaded.size()) { cx = cz = 0; return; }
     cx = gLoaded[i]->cx;
     cz = gLoaded[i]->cz;
+}
+
+void worldColumnSpan(int x, int z, int& y0, int& y1) {
+    Chunk* c = chunkOf(x, z);
+    if (!c) { y0 = 0; y1 = -1; return; }
+    if (c->edited) { y0 = 0; y1 = HEIGHT - 1; return; }
+    int i = modFloor(z, CHUNK) * CHUNK + modFloor(x, CHUNK);
+    y0 = c->vis0[i];
+    y1 = c->vis1[i];
 }
 
 static unsigned gWorldSeed = 1u;
@@ -250,7 +261,8 @@ static void verticalColumn(int x, int z) {
             sky = 0.0f;
         }
         else {
-            if (b == Block::Water) sky *= 0.72f;
+            if (b == Block::Water) sky *= 0.62f;
+            else if (b == Block::Leaves) sky *= 0.52f;
             c->sky[i] = (unsigned char)(sky * 255.0f + 0.5f);
         }
         if (b == Block::Torch || b == Block::Lava) c->lamp[i] = 255;
@@ -416,18 +428,38 @@ static void generateChunk(Chunk* c) {
             }
         }
 
+    auto treeCandidate = [](int x, int z, int& ground) -> bool {
+        unsigned h = mixHash(x, z, 44);
+        if ((int)(h % 1000) > 1000 / 22) return false;
+        ColGen g = columnGen(x, z);
+        if (g.ocean || g.lake || g.beach || g.ground < SEA_LEVEL) return false;
+        int chance = g.forest ? 22 : (g.mountain ? 90 : 70);
+        if ((int)(h % 1000) > 1000 / chance) return false;
+        if ((h >> 8) % 7 == 0) return false;
+        ground = g.ground;
+        return true;
+    };
     for (int lx = -3; lx < CHUNK + 3; ++lx)
         for (int lz = -3; lz < CHUNK + 3; ++lz) {
             int wx = c->cx * CHUNK + lx;
             int wz = c->cz * CHUNK + lz;
-            ColGen g = columnGen(wx, wz);
-            if (g.ocean || g.lake || g.beach) continue;
-            if (g.ground < SEA_LEVEL) continue;
+            int ground = 0;
+            if (!treeCandidate(wx, wz, ground)) continue;
             unsigned h = mixHash(wx, wz, 44);
-            int chance = g.forest ? 22 : (g.mountain ? 90 : 70);
-            if ((int)(h % 1000) > 1000 / chance) continue;
-            if ((h >> 8) % 7 == 0) continue;
-            growTreeInto(c, wx, wz, g.ground);
+            bool crowded = false;
+            for (int oz = -1; oz <= 1 && !crowded; ++oz)
+                for (int ox = -1; ox <= 1; ++ox) {
+                    if (!ox && !oz) continue;
+                    int ng = 0;
+                    if (!treeCandidate(wx + ox, wz + oz, ng)) continue;
+                    unsigned hn = mixHash(wx + ox, wz + oz, 44);
+                    if (hn < h || (hn == h && (ox < 0 || (ox == 0 && oz < 0)))) {
+                        crowded = true;
+                        break;
+                    }
+                }
+            if (crowded) continue;
+            growTreeInto(c, wx, wz, ground);
         }
 
     for (int lx = 0; lx < CHUNK; ++lx)
@@ -452,8 +484,26 @@ static void generateChunk(Chunk* c) {
         }
 
     for (int lx = 0; lx < CHUNK; ++lx)
-        for (int lz = 0; lz < CHUNK; ++lz)
+        for (int lz = 0; lz < CHUNK; ++lz) {
+            int i = lz * CHUNK + lx;
+            int top = -1;
+            for (int y = HEIGHT - 1; y >= 0; --y) {
+                if (c->vol[cidx(lx, y, lz)] != Block::Air) { top = y; break; }
+            }
+            if (top < 0) {
+                c->vis0[i] = 1;
+                c->vis1[i] = 0;
+            }
+            else {
+                int base = SEA_LEVEL - 20;
+                if (top - base > 96) base = top - 96;
+                if (base < 0) base = 0;
+                if (base > top) base = top;
+                c->vis0[i] = (unsigned char)base;
+                c->vis1[i] = (unsigned char)top;
+            }
             verticalColumn(c->cx * CHUNK + lx, c->cz * CHUNK + lz);
+        }
 }
 
 static bool gMeshDirty = true;
@@ -577,6 +627,10 @@ static Chunk* createChunk(int cx, int cz) {
     refreshChunkSurface(c);
     markWaterMeshDirty();
     markMeshArea(cx * CHUNK, cz * CHUNK, cx * CHUNK + CHUNK - 1, cz * CHUNK + CHUNK - 1);
+    markMeshArea((cx - 1) * CHUNK, cz * CHUNK, cx * CHUNK, (cz + 1) * CHUNK - 1);
+    markMeshArea((cx + 1) * CHUNK, cz * CHUNK, (cx + 1) * CHUNK + CHUNK - 1, (cz + 1) * CHUNK - 1);
+    markMeshArea(cx * CHUNK, (cz - 1) * CHUNK, (cx + 1) * CHUNK - 1, cz * CHUNK);
+    markMeshArea(cx * CHUNK, (cz + 1) * CHUNK, (cx + 1) * CHUNK - 1, (cz + 1) * CHUNK + CHUNK - 1);
     return c;
 }
 
@@ -644,29 +698,67 @@ int worldMissingAround(float x, float z, int radius) {
     return miss;
 }
 
+static bool columnDry(int x, int z, int& ground) {
+    ColGen g = columnGen(x, z);
+    if (g.ocean || g.lake || g.beach || g.waterTo >= 0) return false;
+    if (g.ground < SEA_LEVEL + 3) return false;
+    ground = g.ground;
+    return true;
+}
+
+static bool padDry(int x, int z, int& ground) {
+    if (!columnDry(x, z, ground)) return false;
+    for (int dz = -2; dz <= 2; ++dz)
+        for (int dx = -2; dx <= 2; ++dx) {
+            if (!dx && !dz) continue;
+            int near = 0;
+            if (!columnDry(x + dx, z + dz, near)) return false;
+            int dh = near - ground;
+            if (dh < 0) dh = -dh;
+            if (dh > 2) return false;
+        }
+    return true;
+}
+
+static bool blocksDry(int x, int y, int z) {
+    for (int dz = -2; dz <= 2; ++dz)
+        for (int dx = -2; dx <= 2; ++dx) {
+            int wx = x + dx, wz = z + dz;
+            if (!inBounds(wx, y, wz)) return false;
+            if (!solid(wx, y, wz)) return false;
+            if (getB(wx, y, wz) == Block::Water) return false;
+            if (getB(wx, y + 1, wz) == Block::Water || getB(wx, y + 2, wz) == Block::Water) return false;
+            if (solid(wx, y + 1, wz) || solid(wx, y + 2, wz)) return false;
+            if (waterHasSurface(wx, wz) && waterSurfaceY(wx, wz) >= (float)y + 0.75f) return false;
+        }
+    return true;
+}
+
 bool worldFindSpawn(int& x, int& y, int& z) {
     unsigned h = mixHash((int)gWorldSeed, 19, 77);
-    int ox = (int)(h % 181) - 90;
-    int oz = (int)((h >> 9) % 181) - 90;
-    for (int r = 0; r < 96; ++r) {
-        for (int dz = -r; dz <= r; ++dz)
-            for (int dx = -r; dx <= r; ++dx) {
+    int ox = (int)(h % 241) - 120;
+    int oz = (int)((h >> 9) % 241) - 120;
+    for (int r = 0; r < 140; r += 2) {
+        for (int dz = -r; dz <= r; dz += 2)
+            for (int dx = -r; dx <= r; dx += 2) {
                 if (r > 0 && std::abs(dx) != r && std::abs(dz) != r) continue;
-                int wx = ox + dx, wz = oz + dz;
-                ColGen g = columnGen(wx, wz);
-                if (g.ocean || g.lake || g.beach) continue;
-                if (g.waterTo >= 0) continue;
-                if (g.ground < SEA_LEVEL) continue;
-                if (inBounds(wx, g.ground, wz)) {
-                    if (getB(wx, g.ground, wz) == Block::Water) continue;
-                    if (getB(wx, g.ground + 1, wz) == Block::Water) continue;
-                    if (solid(wx, g.ground + 1, wz) || solid(wx, g.ground + 2, wz)) continue;
-                }
-                x = wx; y = g.ground; z = wz;
+                int ground = 0;
+                if (!padDry(ox + dx, oz + dz, ground)) continue;
+                x = ox + dx; y = ground; z = oz + dz;
                 return true;
             }
     }
-    x = ox; y = SEA_LEVEL + 4; z = oz;
+    for (int r = 0; r < 140; r += 3) {
+        for (int dz = -r; dz <= r; dz += 3)
+            for (int dx = -r; dx <= r; dx += 3) {
+                if (r > 0 && std::abs(dx) != r && std::abs(dz) != r) continue;
+                int ground = 0;
+                if (!columnDry(ox + dx, oz + dz, ground)) continue;
+                x = ox + dx; y = ground; z = oz + dz;
+                return true;
+            }
+    }
+    x = ox; y = SEA_LEVEL + 6; z = oz;
     return false;
 }
 
@@ -692,23 +784,19 @@ void worldReset() {
 
 void worldFixSpawn(int& x, int& y, int& z) {
     auto ok = [&](int wx, int wz) -> bool {
-        ColGen g = columnGen(wx, wz);
-        if (g.ocean || g.lake || g.beach) return false;
-        if (g.waterTo >= 0) return false;
-        int gy = g.ground;
+        int gy = 0;
+        if (!padDry(wx, wz, gy)) return false;
         if (!inBounds(wx, gy, wz)) return false;
-        if (getB(wx, gy, wz) == Block::Water || getB(wx, gy + 1, wz) == Block::Water) return false;
-        if (!solid(wx, gy, wz)) return false;
-        if (solid(wx, gy + 1, wz) || solid(wx, gy + 2, wz)) return false;
+        if (!blocksDry(wx, gy, wz)) return false;
         x = wx;
         y = gy;
         z = wz;
         return true;
     };
     if (ok(x, z)) return;
-    for (int r = 1; r < 80; ++r) {
-        for (int dz = -r; dz <= r; ++dz)
-            for (int dx = -r; dx <= r; ++dx) {
+    for (int r = 2; r < 96; r += 2) {
+        for (int dz = -r; dz <= r; dz += 2)
+            for (int dx = -r; dx <= r; dx += 2) {
                 if (std::abs(dx) != r && std::abs(dz) != r) continue;
                 if (ok(x + dx, z + dz)) return;
             }
@@ -1223,10 +1311,10 @@ static float sampleField(bool sky, int bx, int by, int bz, float nx, float ny, f
     int sy = by + (ny > 0.0f ? 1 : (ny < 0.0f ? -1 : 0));
     int sz = bz + (nz > 0.0f ? 1 : (nz < 0.0f ? -1 : 0));
     if (!inBounds(sx, sy, sz)) {
-        if (skyOpen && ny > 0.0f) return 1.0f;
+        if (sky && (ny >= 0.0f || skyOpen)) return ny < 0.0f ? 0.62f : 1.0f;
         return 0.0f;
     }
-    if (solid(sx, sy, sz)) return 0.0f;
+    if (solid(sx, sy, sz)) return sky ? 0.15f : 0.0f;
     return sky ? fieldSky(sx, sy, sz) : fieldLamp(sx, sy, sz);
 }
 

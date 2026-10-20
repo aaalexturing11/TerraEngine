@@ -99,13 +99,11 @@ float shadowVis(vec3 world, float ndl) {
     if (p.x < 0.0 || p.y < 0.0 || p.x > 1.0 || p.y > 1.0) return 1.0;
     vec2 texel = vec2(1.0 / 1024.0);
     float sum = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
-            float d = texture(uShadowMap, p.xy + vec2(x, y) * texel).r;
-            sum += (d + 0.0022 > p.z) ? 1.0 : 0.0;
-        }
-    }
-    return mix(0.42, 1.0, sum / 9.0);
+    sum += (texture(uShadowMap, p.xy + vec2(-texel.x, -texel.y)).r + 0.0045 > p.z) ? 1.0 : 0.0;
+    sum += (texture(uShadowMap, p.xy + vec2(texel.x, -texel.y)).r + 0.0045 > p.z) ? 1.0 : 0.0;
+    sum += (texture(uShadowMap, p.xy + vec2(-texel.x, texel.y)).r + 0.0045 > p.z) ? 1.0 : 0.0;
+    sum += (texture(uShadowMap, p.xy + vec2(texel.x, texel.y)).r + 0.0045 > p.z) ? 1.0 : 0.0;
+    return mix(0.55, 1.0, sum * 0.25);
 }
 
 void main() {
@@ -164,22 +162,13 @@ void main() {
     vLip = gl_MultiTexCoord1.y;
     vNormal = gl_Normal;
     if (gl_Normal.y > 0.5) {
-        vec2 uv = p.xz / 16.0;
-        vec3 fft = textureLod(uFft, uv, 0.0).xyz;
+        vec3 a = textureLod(uFft, p.xz / 73.0, 0.0).xyz;
+        vec3 b = textureLod(uFft, p.xz / 29.0 + vec2(0.37, 0.18), 0.0).xyz;
         vec2 hUV = (p.xz - uHeightOrigin) / uWorld;
-        float occ0 = textureLod(uHeight, hUV, 0.0).g;
-        float edge = smoothstep(0.22, 0.92, occ0);
-        vec2 chopped = p.xz + fft.yz * edge;
-        float occ1 = textureLod(uHeight, (chopped - uHeightOrigin) / uWorld, 0.0).g;
-        if (occ1 > 0.82) p.xz = chopped;
-        float rip = textureLod(uRipple, (p.xz - uHeightOrigin) / uWorld, 0.0).r;
-        float e = 1.0 / 32.0;
-        float hL = textureLod(uFft, uv - vec2(e, 0), 0.0).x;
-        float hR = textureLod(uFft, uv + vec2(e, 0), 0.0).x;
-        float hD = textureLod(uFft, uv - vec2(0, e), 0.0).x;
-        float hU = textureLod(uFft, uv + vec2(0, e), 0.0).x;
-        p.y += (fft.x + rip * 0.12) * edge;
-        vNormal = normalize(mix(vec3(0.0, 1.0, 0.0), vec3(hL - hR, 0.55, hD - hU), edge));
+        float occ = textureLod(uHeight, hUV, 0.0).g;
+        float edge = smoothstep(0.2, 0.9, occ);
+        float rip = textureLod(uRipple, hUV, 0.0).r;
+        p.y += (a.x * 0.42 + b.x * 0.28 + rip * 0.06) * edge;
     }
     vWorld = p;
     gl_Position = gl_ModelViewProjectionMatrix * vec4(p, 1.0);
@@ -212,7 +201,7 @@ uniform vec2 uHeightOrigin;
 
 float linearDepth(float d) {
     float z = d * 2.0 - 1.0;
-    return (2.0 * 0.1 * 250.0) / (250.1 - z * (250.0 - 0.1));
+    return (2.0 * 0.12 * 360.0) / (360.12 - z * (360.0 - 0.12));
 }
 
 float sunVis(vec3 world) {
@@ -284,50 +273,48 @@ void main() {
         return;
     }
 
-    vec2 fuv = vWorld.xz / 16.0;
-    float e = 1.0 / 32.0;
-    float hL = texture(uFft, fuv - vec2(e, 0)).x;
-    float hR = texture(uFft, fuv + vec2(e, 0)).x;
-    float hD = texture(uFft, fuv - vec2(0, e)).x;
-    float hU = texture(uFft, fuv + vec2(0, e)).x;
-    vec3 n = normalize(vec3(hL - hR, 0.55, hD - hU));
-    {
-        vec2 ruv = (vWorld.xz - uHeightOrigin) / uWorld;
-        float re = 1.0 / (uWorld * 4.0);
-        float hx = texture(uRipple, ruv + vec2(re, 0)).r - texture(uRipple, ruv - vec2(re, 0)).r;
-        float hz = texture(uRipple, ruv + vec2(0, re)).r - texture(uRipple, ruv - vec2(0, re)).r;
-        n = normalize(n + vec3(-hx, 0.0, -hz) * 2.4);
-    }
+    vec2 uvA = vWorld.xz / 73.0;
+    vec2 uvB = vWorld.xz / 29.0 + vec2(0.37, 0.18);
+    float e = 0.018;
+    float hL = texture(uFft, uvA - vec2(e, 0.0)).x * 0.62 + texture(uFft, uvB - vec2(e, 0.0)).x * 0.38;
+    float hR = texture(uFft, uvA + vec2(e, 0.0)).x * 0.62 + texture(uFft, uvB + vec2(e, 0.0)).x * 0.38;
+    float hD = texture(uFft, uvA - vec2(0.0, e)).x * 0.62 + texture(uFft, uvB - vec2(0.0, e)).x * 0.38;
+    float hU = texture(uFft, uvA + vec2(0.0, e)).x * 0.62 + texture(uFft, uvB + vec2(0.0, e)).x * 0.38;
+    float dist = length(vWorld.xz - uCam.xz);
+    float detail = 1.0 - smoothstep(36.0, 110.0, dist);
+    vec3 n = normalize(vec3((hL - hR) * detail, 1.05, (hD - hU) * detail));
+    vec2 ruv = (vWorld.xz - uHeightOrigin) / max(uWorld, 1.0);
+    float re = 1.5 / max(uWorld, 1.0);
+    float hx = texture(uRipple, ruv + vec2(re, 0.0)).r - texture(uRipple, ruv - vec2(re, 0.0)).r;
+    float hz = texture(uRipple, ruv + vec2(0.0, re)).r - texture(uRipple, ruv - vec2(0.0, re)).r;
+    n = normalize(n + vec3(-hx, 0.0, -hz) * detail);
+
     vec3 view = normalize(uCam - vWorld);
     vec2 uv = gl_FragCoord.xy / vec2(textureSize(uScene, 0));
-    vec2 distort = n.xz * 0.02;
+    vec2 distort = n.xz * 0.012 * detail;
     vec2 texCoordRefract = clamp(uv + distort, vec2(0.001), vec2(0.999));
-    vec2 texCoordReflect = vec2(uv.x, 1.0 - uv.y) + distort;
-    texCoordReflect.x = clamp(texCoordReflect.x, 0.001, 0.999);
-    texCoordReflect.y = clamp(texCoordReflect.y, 0.001, 0.999);
 
     float sceneD = texture(uDepth, uv).r;
-    float thick = sceneD > 0.998 ? 12.0 : max(linearDepth(sceneD) - linearDepth(gl_FragCoord.z), 0.0);
+    float thick = sceneD > 0.998 ? 14.0 : max(linearDepth(sceneD) - linearDepth(gl_FragCoord.z), 0.0);
+    float absorb = clamp(0.72 + thick * 0.06, 0.72, 0.96);
 
     vec3 L = normalize(uSunDir);
     vec3 H = normalize(L + view);
-    float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(H, view), 0.0), 5.0);
+    float ndv = max(dot(n, view), 0.0);
+    float fresnel = 0.02 + 0.55 * pow(1.0 - ndv, 4.0);
 
-    vec3 refr = mix(texture(uScene, texCoordRefract).rgb, vec3(0.168, 0.267, 0.255), 0.88);
-    vec3 sky = uSky * vec3(0.78, 0.90, 1.0);
-    vec3 reflHit = texture(uScene, texCoordReflect).rgb;
-    vec3 refl = mix(sky, reflHit, 0.5);
-    vec3 col = mix(sky, refl, 0.5);
-    col = mix(refr, col, clamp(fresnel, 0.0, 1.0));
-    col += vec3(1.0) * (20.0 * uSunAmt) * max(pow(max(dot(n, H), 0.0), 300.0), 0.0);
+    vec3 deep = vec3(0.02, 0.18, 0.26);
+    vec3 refr = mix(texture(uScene, texCoordRefract).rgb, deep, absorb);
+    vec3 sky = uSky * vec3(0.62, 0.82, 0.95);
+    vec3 col = mix(refr, sky, clamp(fresnel, 0.0, 0.72));
+    col += vec3(1.0, 0.98, 0.92) * pow(max(dot(n, H), 0.0), 80.0) * uSunAmt * 0.65;
 
-    float foam = clamp(vFlow.w, 0.0, 1.0);
-    foam = clamp(foam + abs(texture(uRipple, (vWorld.xz - uHeightOrigin) / uWorld).r) * 2.5, 0.0, 1.0);
-    col = mix(col, vec3(0.90, 0.97, 1.0), foam * 0.35);
-    col += waterGodRays(vWorld, n, thick);
-    float fog = smoothstep(118.0, 168.0, length(vWorld.xz - uCam.xz));
+    float occ = texture(uHeight, ruv).g;
+    float shore = (1.0 - smoothstep(0.15, 0.72, occ)) * (1.0 - smoothstep(0.05, 1.3, thick));
+    col = mix(col, vec3(0.78, 0.92, 0.94), shore * 0.42);
+    float fog = smoothstep(118.0, 168.0, dist);
     col = mix(col, uSky, fog);
-    fragColor = vec4(col, 1.0);
+    fragColor = vec4(col, 0.94);
 }
 )GLSL";
 

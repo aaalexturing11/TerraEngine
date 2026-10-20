@@ -140,9 +140,12 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         const bool inWorld = gameMenuInWorld();
         glm::vec3 camPos = cameraPosition();
         if (inWorld) {
-            beginShadowPass(light, camPos);
-            renderShadowCasters(shadowRadiusXZ, renderMaxY);
-            endShadowPass(width, height);
+            beginFrameMeshes();
+            if (light.sunIntensity > 0.08f) {
+                beginShadowPass(light, camPos);
+                renderShadowCasters(shadowRadiusXZ, renderMaxY);
+                endShadowPass(width, height);
+            }
             beginScenePass(width, height);
             setup3D(width, height);
         }

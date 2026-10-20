@@ -337,7 +337,7 @@ static void fftEvaluate(float t) {
         for (int n = 0; n < FN; ++n) {
             int i = m * FN + n;
             float sign = ((n + m) & 1) ? -1.0f : 1.0f;
-            gFftPix[i * 3 + 0] = gSpec[i].r * sign * 0.62f;
+            gFftPix[i * 3 + 0] = gSpec[i].r * sign * 0.38f;
             gFftPix[i * 3 + 1] = gDx[i].r * sign * FLAMBDA * 0.30f;
             gFftPix[i * 3 + 2] = gDz[i].r * sign * FLAMBDA * 0.30f;
         }
@@ -367,6 +367,13 @@ void fluidBindFft(int unit) {
 }
 
 void fluidBindHeight(int unit) {
+    static int skip = 0;
+    if (gHeightTex && (++skip & 1)) {
+        glx.ActiveTexture(GL_TEXTURE0 + unit);
+        glBindTexture(GL_TEXTURE_2D, gHeightTex);
+        glx.ActiveTexture(GL_TEXTURE0);
+        return;
+    }
     for (int z = 0; z < RN; ++z)
         for (int x = 0; x < RN; ++x) {
             int wx = (int)std::floor(gHOriginX) + x;
