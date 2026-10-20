@@ -223,10 +223,13 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 
         blitSceneForWater();
         bindWaterInputs();
-        float projM[16], viewM[16];
-        glGetFloatv(GL_PROJECTION_MATRIX, projM);
-        glGetFloatv(GL_MODELVIEW_MATRIX, viewM);
-        glm::mat4 viewProj = glm::make_mat4(projM) * glm::make_mat4(viewM);
+        int sceneW = 1, sceneH = 1;
+        scenePassSize(sceneW, sceneH);
+        float sceneAspect = sceneH > 0 ? (float)sceneW / (float)sceneH : 1.0f;
+        glm::vec3 eye = cameraPosition() + cameraBobOffset();
+        glm::mat4 proj = glm::perspective(glm::radians(cameraFov()), sceneAspect, 0.12f, 360.0f);
+        glm::mat4 view = glm::lookAt(eye, eye + cameraLookDirection(), glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::mat4 viewProj = proj * view;
         bindWaterShader(viewProj, cameraPosition(), light.skyColor, light.sunDir, light.sunIntensity, time);
         renderWaterBlocks(renderRadiusXZ, renderMaxY);
         bindFixedPipeline();

@@ -89,8 +89,15 @@ static Chunk* findChunk(int cx, int cz) {
     return it == gChunks.end() ? nullptr : it->second;
 }
 
+static Chunk* gChunkHint = nullptr;
+
 static Chunk* chunkOf(int x, int z) {
-    return findChunk(divFloor(x, CHUNK), divFloor(z, CHUNK));
+    int cx = divFloor(x, CHUNK);
+    int cz = divFloor(z, CHUNK);
+    if (gChunkHint && gChunkHint->cx == cx && gChunkHint->cz == cz) return gChunkHint;
+    Chunk* c = findChunk(cx, cz);
+    if (c) gChunkHint = c;
+    return c;
 }
 
 static bool yOk(int y) { return y >= 0 && y < HEIGHT; }
@@ -143,7 +150,6 @@ void loadedChunkCoord(int i, int& cx, int& cz) {
 void worldColumnSpan(int x, int z, int& y0, int& y1) {
     Chunk* c = chunkOf(x, z);
     if (!c) { y0 = 0; y1 = -1; return; }
-    if (c->edited) { y0 = 0; y1 = HEIGHT - 1; return; }
     int i = modFloor(z, CHUNK) * CHUNK + modFloor(x, CHUNK);
     y0 = c->vis0[i];
     y1 = c->vis1[i];
@@ -451,14 +457,14 @@ static void floodBox(int x0, int y0, int z0, int x1, int y1, int z1, int passes)
 }
 
 static void relightRegion(int x, int y, int z) {
-    const int r = 10;
+    const int r = 4;
     for (int ix = x - r; ix <= x + r; ++ix)
         for (int iz = z - r; iz <= z + r; ++iz)
             verticalColumn(ix, iz);
-    int y0 = y - 8, y1 = y + 8;
+    int y0 = y - 4, y1 = y + 4;
     if (y0 < 0) y0 = 0;
     if (y1 >= HEIGHT) y1 = HEIGHT - 1;
-    floodBox(x - r, y0, z - r, x + r, y1, z + r, 10);
+    floodBox(x - r, y0, z - r, x + r, y1, z + r, 4);
 }
 
 static void placeInChunk(Chunk* c, int wx, int y, int wz, Block b) {
@@ -885,6 +891,7 @@ int worldStreamAround(float x, float z) {
         if (adz < 0) adz = -adz;
         if (adx > R + 1 || adz > R + 1) {
             if (!c->edited) {
+                if (gChunkHint == c) gChunkHint = nullptr;
                 gChunks.erase(packChunk(c->cx, c->cz));
                 delete c;
                 continue;
@@ -980,6 +987,7 @@ static std::vector<WaterCell> waterCells;
 static float gImpactLock = 0.0f;
 
 void worldReset() {
+    gChunkHint = nullptr;
     for (size_t i = 0; i < gLoaded.size(); ++i)
         delete gLoaded[i];
     gLoaded.clear();
@@ -1417,8 +1425,21 @@ void setBlock(int x, int y, int z, Block value, int meta) {
     }
     if (blockInfo(old).solid && !blockInfo(value).solid)
         releaseDecorations(x, y, z);
+    auto expandSpan = [](int sx, int sz, int sy) {
+        if (sy < 0) sy = 0;
+        if (sy >= HEIGHT) sy = HEIGHT - 1;
+        Chunk* sc = chunkOf(sx, sz);
+        if (!sc) return;
+        int si = modFloor(sz, CHUNK) * CHUNK + modFloor(sx, CHUNK);
+        if ((unsigned)sy < sc->vis0[si]) sc->vis0[si] = (unsigned char)sy;
+        if ((unsigned)sy > sc->vis1[si]) sc->vis1[si] = (unsigned char)sy;
+    };
+    for (int oz = -1; oz <= 1; ++oz)
+        for (int ox = -1; ox <= 1; ++ox)
+            for (int oy = -1; oy <= 1; ++oy)
+                expandSpan(x + ox, z + oz, y + oy);
     relightRegion(x, y, z);
-    markMeshArea(x - 16, z - 16, x + 16, z + 16);
+    markMeshArea(x - 5, z - 5, x + 5, z + 5);
     if (!gReacting)
         resolveFluidContact(x, y, z);
 }

@@ -38,6 +38,9 @@ struct GlApi {
     PFNGLDELETEBUFFERSPROC DeleteBuffers;
     PFNGLBINDBUFFERPROC BindBuffer;
     PFNGLBUFFERDATAPROC BufferData;
+    PFNGLGENVERTEXARRAYSPROC GenVertexArrays;
+    PFNGLDELETEVERTEXARRAYSPROC DeleteVertexArrays;
+    PFNGLBINDVERTEXARRAYPROC BindVertexArray;
 };
 
 extern GlApi glx;

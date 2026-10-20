@@ -46,7 +46,10 @@ bool initGlExtensions() {
     glx.DeleteBuffers = loadProc<PFNGLDELETEBUFFERSPROC>("glDeleteBuffers");
     glx.BindBuffer = loadProc<PFNGLBINDBUFFERPROC>("glBindBuffer");
     glx.BufferData = loadProc<PFNGLBUFFERDATAPROC>("glBufferData");
-    return glx.CreateShader && glx.GenFramebuffers && glx.UseProgram && glx.BlitFramebuffer && glx.MultiTexCoord4f && glx.GenBuffers;
+    glx.GenVertexArrays = loadProc<PFNGLGENVERTEXARRAYSPROC>("glGenVertexArrays");
+    glx.DeleteVertexArrays = loadProc<PFNGLDELETEVERTEXARRAYSPROC>("glDeleteVertexArrays");
+    glx.BindVertexArray = loadProc<PFNGLBINDVERTEXARRAYPROC>("glBindVertexArray");
+    return glx.CreateShader && glx.GenFramebuffers && glx.UseProgram && glx.BlitFramebuffer && glx.MultiTexCoord4f && glx.GenBuffers && glx.GenVertexArrays;
 }
 
 static unsigned compileStage(unsigned type, const char* src) {

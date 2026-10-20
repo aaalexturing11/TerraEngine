@@ -23,31 +23,39 @@ struct MeshVert {
 struct MeshBatch {
     unsigned tex = 0;
     unsigned vbo = 0;
+    unsigned vao = 0;
     int count = 0;
     std::vector<MeshVert> v;
+    void release() {
+        if (vao && glx.DeleteVertexArrays) glx.DeleteVertexArrays(1, &vao);
+        if (vbo && glx.DeleteBuffers) glx.DeleteBuffers(1, &vbo);
+        vao = 0;
+        vbo = 0;
+    }
     MeshBatch() = default;
     MeshBatch(const MeshBatch&) = delete;
     MeshBatch& operator=(const MeshBatch&) = delete;
     MeshBatch(MeshBatch&& o) noexcept
-        : tex(o.tex), vbo(o.vbo), count(o.count), v(std::move(o.v)) {
+        : tex(o.tex), vbo(o.vbo), vao(o.vao), count(o.count), v(std::move(o.v)) {
         o.vbo = 0;
+        o.vao = 0;
         o.count = 0;
     }
     MeshBatch& operator=(MeshBatch&& o) noexcept {
         if (this != &o) {
-            if (vbo && glx.DeleteBuffers) glx.DeleteBuffers(1, &vbo);
+            release();
             tex = o.tex;
             vbo = o.vbo;
+            vao = o.vao;
             count = o.count;
             v = std::move(o.v);
             o.vbo = 0;
+            o.vao = 0;
             o.count = 0;
         }
         return *this;
     }
-    ~MeshBatch() {
-        if (vbo && glx.DeleteBuffers) glx.DeleteBuffers(1, &vbo);
-    }
+    ~MeshBatch() { release(); }
 };
 
 static std::vector<MeshBatch>* gCap = nullptr;
@@ -511,19 +519,39 @@ static int divFloorR(int a, int b) {
     return q;
 }
 
+static void bindMeshPointers() {
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_NORMAL_ARRAY);
+    glEnableClientState(GL_COLOR_ARRAY);
+    glVertexPointer(3, GL_FLOAT, sizeof(MeshVert), (const void*)offsetof(MeshVert, px));
+    glNormalPointer(GL_FLOAT, sizeof(MeshVert), (const void*)offsetof(MeshVert, nx));
+    glColorPointer(4, GL_FLOAT, sizeof(MeshVert), (const void*)offsetof(MeshVert, r));
+    glx.ClientActiveTexture(GL_TEXTURE0);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glTexCoordPointer(4, GL_FLOAT, sizeof(MeshVert), (const void*)offsetof(MeshVert, t0x));
+    glx.ClientActiveTexture(GL_TEXTURE1);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glTexCoordPointer(4, GL_FLOAT, sizeof(MeshVert), (const void*)offsetof(MeshVert, t1x));
+    glx.ClientActiveTexture(GL_TEXTURE2);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glTexCoordPointer(4, GL_FLOAT, sizeof(MeshVert), (const void*)offsetof(MeshVert, t2x));
+    glx.ClientActiveTexture(GL_TEXTURE0);
+}
+
 static void uploadBatch(MeshBatch& batch) {
     batch.count = (int)batch.v.size();
     if (batch.count <= 0) {
-        if (batch.vbo) {
-            glx.DeleteBuffers(1, &batch.vbo);
-            batch.vbo = 0;
-        }
+        batch.release();
         batch.v.clear();
         return;
     }
     if (!batch.vbo) glx.GenBuffers(1, &batch.vbo);
+    if (!batch.vao) glx.GenVertexArrays(1, &batch.vao);
+    glx.BindVertexArray(batch.vao);
     glx.BindBuffer(GL_ARRAY_BUFFER, batch.vbo);
     glx.BufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(batch.v.size() * sizeof(MeshVert)), batch.v.data(), GL_STATIC_DRAW);
+    bindMeshPointers();
+    glx.BindVertexArray(0);
     glx.BindBuffer(GL_ARRAY_BUFFER, 0);
     batch.v.clear();
     batch.v.shrink_to_fit();
@@ -706,58 +734,24 @@ static bool chunkVisible(int cx, int cz, int radius) {
     return dot > -0.2f;
 }
 
-static void bindMeshVbo() {
-    const void* p = nullptr;
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glEnableClientState(GL_NORMAL_ARRAY);
-    glEnableClientState(GL_COLOR_ARRAY);
-    glVertexPointer(3, GL_FLOAT, sizeof(MeshVert), (const void*)((const char*)p + offsetof(MeshVert, px)));
-    glNormalPointer(GL_FLOAT, sizeof(MeshVert), (const void*)((const char*)p + offsetof(MeshVert, nx)));
-    glColorPointer(4, GL_FLOAT, sizeof(MeshVert), (const void*)((const char*)p + offsetof(MeshVert, r)));
-    glx.ClientActiveTexture(GL_TEXTURE0);
-    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-    glTexCoordPointer(4, GL_FLOAT, sizeof(MeshVert), (const void*)((const char*)p + offsetof(MeshVert, t0x)));
-    glx.ClientActiveTexture(GL_TEXTURE1);
-    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-    glTexCoordPointer(4, GL_FLOAT, sizeof(MeshVert), (const void*)((const char*)p + offsetof(MeshVert, t1x)));
-    glx.ClientActiveTexture(GL_TEXTURE2);
-    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-    glTexCoordPointer(4, GL_FLOAT, sizeof(MeshVert), (const void*)((const char*)p + offsetof(MeshVert, t2x)));
-}
-
-static void unbindMeshVbo() {
-    glDisableClientState(GL_VERTEX_ARRAY);
-    glDisableClientState(GL_NORMAL_ARRAY);
-    glDisableClientState(GL_COLOR_ARRAY);
-    glx.ClientActiveTexture(GL_TEXTURE2);
-    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-    glx.ClientActiveTexture(GL_TEXTURE1);
-    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-    glx.ClientActiveTexture(GL_TEXTURE0);
-    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-    glx.BindBuffer(GL_ARRAY_BUFFER, 0);
-}
-
 static void drawBatches(const std::vector<MeshBatch>& batches, bool animateTorch) {
     for (const MeshBatch& batch : batches) {
-        if (!batch.vbo || batch.count <= 0) continue;
+        if (!batch.vao || batch.count <= 0) continue;
         unsigned tex = batch.tex;
         if (animateTorch && tex == gBlockTex.torch && gBlockTex.torchAlt && (((int)(glfwGetTime() * 7.0)) & 1))
             tex = gBlockTex.torchAlt;
         bindAlbedo(tex);
-        glx.BindBuffer(GL_ARRAY_BUFFER, batch.vbo);
-        bindMeshVbo();
+        glx.BindVertexArray(batch.vao);
         glDrawArrays(GL_QUADS, 0, batch.count);
-        unbindMeshVbo();
     }
+    glx.BindVertexArray(0);
 }
 
 static void drawWaterMesh(const MeshBatch& water) {
-    if (!water.vbo || water.count <= 0) return;
-    glx.BindBuffer(GL_ARRAY_BUFFER, water.vbo);
-    bindMeshVbo();
+    if (!water.vao || water.count <= 0) return;
+    glx.BindVertexArray(water.vao);
     glDrawArrays(GL_QUADS, 0, water.count);
-    unbindMeshVbo();
+    glx.BindVertexArray(0);
 }
 
 void clearWorldMeshes() {
@@ -817,14 +811,13 @@ void renderShadowCasters(int renderRadiusXZ, int) {
     for (auto it = gMeshes.begin(); it != gMeshes.end(); ++it) {
         if (!chunkVisible(it->second.cx, it->second.cz, plantRadius)) continue;
         for (const MeshBatch& batch : it->second.cutout) {
-            if (!plantShadowTex(batch.tex) || !batch.vbo || batch.count <= 0) continue;
+            if (!plantShadowTex(batch.tex) || !batch.vao || batch.count <= 0) continue;
             bindAlbedo(batch.tex);
-            glx.BindBuffer(GL_ARRAY_BUFFER, batch.vbo);
-            bindMeshVbo();
+            glx.BindVertexArray(batch.vao);
             glDrawArrays(GL_QUADS, 0, batch.count);
-            unbindMeshVbo();
         }
     }
+    glx.BindVertexArray(0);
 }
 
 void renderOpaqueBlocks(int renderRadiusXZ, int) {
