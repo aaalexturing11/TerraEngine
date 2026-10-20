@@ -42,7 +42,11 @@ bool initGlExtensions() {
     glx.MultiTexCoord3f = loadProc<PFNGLMULTITEXCOORD3FPROC>("glMultiTexCoord3f");
     glx.MultiTexCoord4f = loadProc<PFNGLMULTITEXCOORD4FPROC>("glMultiTexCoord4f");
     glx.ClientActiveTexture = loadProc<PFNGLCLIENTACTIVETEXTUREPROC>("glClientActiveTexture");
-    return glx.CreateShader && glx.GenFramebuffers && glx.UseProgram && glx.BlitFramebuffer && glx.MultiTexCoord4f;
+    glx.GenBuffers = loadProc<PFNGLGENBUFFERSPROC>("glGenBuffers");
+    glx.DeleteBuffers = loadProc<PFNGLDELETEBUFFERSPROC>("glDeleteBuffers");
+    glx.BindBuffer = loadProc<PFNGLBINDBUFFERPROC>("glBindBuffer");
+    glx.BufferData = loadProc<PFNGLBUFFERDATAPROC>("glBufferData");
+    return glx.CreateShader && glx.GenFramebuffers && glx.UseProgram && glx.BlitFramebuffer && glx.MultiTexCoord4f && glx.GenBuffers;
 }
 
 static unsigned compileStage(unsigned type, const char* src) {

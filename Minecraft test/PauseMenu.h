@@ -21,7 +21,7 @@ struct PauseMenuState {
     int windowedPosX = 100, windowedPosY = 100;
     int windowedWidth = 800, windowedHeight = 800;
     int fpsCap = 0;
-    bool vsyncEnabled = true;
+    bool vsyncEnabled = false;
 };
 
 void gameMenuInit();

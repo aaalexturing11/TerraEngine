@@ -506,29 +506,58 @@ static void generateChunk(Chunk* c) {
             int yTop = wet ? ground - 5 : (entrance ? ground : ground - 4);
             if (yTop > HEIGHT - 2) yTop = HEIGHT - 2;
             if (yTop < 6) continue;
-            bool prevCave = false;
             for (int y = 4; y <= yTop; ++y) {
                 float cheese = valueNoise3((float)wx * 0.045f, (float)y * 0.07f, (float)wz * 0.045f, 301);
                 float tunnel = valueNoise3((float)wx * 0.026f, (float)y * 0.085f, (float)wz * 0.026f, 418);
                 bool cave = cheese > 0.70f || std::abs(tunnel - 0.5f) < 0.048f;
-                if (!cave) { prevCave = false; continue; }
+                if (!cave) continue;
                 Block cur = c->vol[cidx(lx, y, lz)];
-                if (cur == Block::Air || cur == Block::Water) { prevCave = true; continue; }
-                Block below = y > 0 ? c->vol[cidx(lx, y - 1, lz)] : Block::Stone;
-                bool solidBelow = below == Block::Stone || below == Block::Dirt || below == Block::Grass;
-                if (!prevCave && solidBelow && y < SEA_LEVEL - 2 && y < ground - 6) {
-                    float spring = valueNoise3((float)wx * 0.035f, (float)y * 0.02f, (float)wz * 0.035f, 512);
-                    if (spring > 0.73f) {
-                        setVol(c, lx, y, lz, Block::Water);
-                        if (y > 0 && (int)carveLo[ci] > y - 1) carveLo[ci] = (unsigned char)(y - 1);
-                        prevCave = true;
-                        continue;
-                    }
-                }
+                if (cur == Block::Air || cur == Block::Water) continue;
                 setVol(c, lx, y, lz, Block::Air);
                 if (y > 0 && (int)carveLo[ci] > y - 1) carveLo[ci] = (unsigned char)(y - 1);
-                prevCave = true;
             }
+        }
+
+    auto wellFloor = [&](int lx, int y, int lz) -> bool {
+        if (lx < 1 || lz < 1 || lx >= CHUNK - 1 || lz >= CHUNK - 1) return false;
+        if (y < 6 || y >= HEIGHT - 2) return false;
+        Block here = c->vol[cidx(lx, y, lz)];
+        Block below = c->vol[cidx(lx, y - 1, lz)];
+        Block above = c->vol[cidx(lx, y + 1, lz)];
+        if (here != Block::Air || above != Block::Air) return false;
+        if (below != Block::Stone && below != Block::Dirt && below != Block::Grass) return false;
+        const int dir[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+        for (int i = 0; i < 4; ++i) {
+            int nx = lx + dir[i][0], nz = lz + dir[i][1];
+            Block side = c->vol[cidx(nx, y, nz)];
+            Block under = c->vol[cidx(nx, y - 1, nz)];
+            bool openDrop = (side == Block::Air || side == Block::Water)
+                && (under == Block::Air || under == Block::Water);
+            if (openDrop) return false;
+        }
+        return true;
+    };
+    for (int lx = 1; lx < CHUNK - 1; ++lx)
+        for (int lz = 1; lz < CHUNK - 1; ++lz) {
+            int ci = lz * CHUNK + lx;
+            if (colWet[ci]) continue;
+            int wx = c->cx * CHUNK + lx;
+            int wz = c->cz * CHUNK + lz;
+            if ((mixHash(wx >> 1, wz >> 1, 770) % 70) != 0) continue;
+            int ground = colGround[ci];
+            int floorY = -1;
+            int limit = ground - 6;
+            if (limit > HEIGHT - 3) limit = HEIGHT - 3;
+            for (int y = 6; y < limit; ++y) {
+                if (!wellFloor(lx, y, lz)) continue;
+                floorY = y;
+                break;
+            }
+            if (floorY < 0) continue;
+            for (int dz = -1; dz <= 1; ++dz)
+                for (int dx = -1; dx <= 1; ++dx)
+                    if (wellFloor(lx + dx, floorY, lz + dz))
+                        setVol(c, lx + dx, floorY, lz + dz, Block::Water);
         }
 
     auto treeCandidate = [](int x, int z, int& ground) -> bool {

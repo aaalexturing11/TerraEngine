@@ -171,12 +171,16 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         if (inWorld) {
             beginFrameMeshes();
             if (light.sunIntensity > 0.08f && generated == 0 && ((shadowTick++ & 1) == 0)) {
-                beginShadowPass(light, camPos);
+                glm::vec3 vel = cameraVelocity();
+                float spd = std::sqrt(vel.x * vel.x + vel.z * vel.z);
+                beginShadowPass(light, camPos, spd > 6.0f ? 512 : 1024);
                 renderShadowCasters(shadowRadiusXZ, renderMaxY);
                 endShadowPass(width, height);
             }
             beginScenePass(width, height);
-            setup3D(width, height);
+            int sceneW = width, sceneH = height;
+            scenePassSize(sceneW, sceneH);
+            setup3D(sceneW, sceneH);
         }
         else {
             glx.BindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -373,6 +377,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         }
     }
 
+    clearWorldMeshes();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();

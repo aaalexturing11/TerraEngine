@@ -4,7 +4,7 @@
 #include <glm/glm.hpp>
 
 bool initBlockShaders();
-void beginShadowPass(const DayNightLighting& light, const glm::vec3& focus);
+void beginShadowPass(const DayNightLighting& light, const glm::vec3& focus, int mapSize);
 void endShadowPass(int viewW, int viewH);
 void bindOpaqueShader(const DayNightLighting& light, float time);
 void bindPlantShadowShader(float time);

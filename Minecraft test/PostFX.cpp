@@ -286,9 +286,11 @@ bool initPostFX() {
 }
 
 void beginScenePass(int width, int height) {
-    if (width != gW || height != gH) allocTargets(width, height);
+    int w = width * 3 / 4; if (w < 1) w = 1;
+    int h = height * 3 / 4; if (h < 1) h = 1;
+    if (w != gW || h != gH) allocTargets(w, h);
     glx.BindFramebuffer(GL_FRAMEBUFFER, gSceneFbo);
-    glViewport(0, 0, width, height);
+    glViewport(0, 0, gW, gH);
     glDrawBuffer(GL_COLOR_ATTACHMENT0);
 }
 
@@ -308,6 +310,11 @@ void bindWaterInputs() {
     glx.ActiveTexture(GL_TEXTURE0);
 }
 
+void scenePassSize(int& width, int& height) {
+    width = gW > 0 ? gW : 1;
+    height = gH > 0 ? gH : 1;
+}
+
 void presentScene(int width, int height, const DayNightLighting& light, const glm::vec2& sunUv, float godStrength, bool underwater, float time) {
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
@@ -318,28 +325,32 @@ void presentScene(int width, int height, const DayNightLighting& light, const gl
 
     setOrtho();
 
-    int hw = width / 2; if (hw < 1) hw = 1;
-    int hh = height / 2; if (hh < 1) hh = 1;
-    int qw = width / 4; if (qw < 1) qw = 1;
-    int qh = height / 4; if (qh < 1) qh = 1;
+    int sw = gW > 0 ? gW : width;
+    int sh = gH > 0 ? gH : height;
+    int hw = sw / 2; if (hw < 1) hw = 1;
+    int hh = sh / 2; if (hh < 1) hh = 1;
+    int qw = sw / 4; if (qw < 1) qw = 1;
+    int qh = sh / 4; if (qh < 1) qh = 1;
 
     glx.BindFramebuffer(GL_FRAMEBUFFER, gAoFbo);
     glViewport(0, 0, hw, hh);
     glx.UseProgram(gProgSsao);
     glx.Uniform1i(glx.GetUniformLocation(gProgSsao, "uDepth"), 0);
-    glx.Uniform2f(glx.GetUniformLocation(gProgSsao, "uInvRes"), 1.0f / width, 1.0f / height);
+    glx.Uniform2f(glx.GetUniformLocation(gProgSsao, "uInvRes"), 1.0f / sw, 1.0f / sh);
     glx.UniformMatrix4fv(glx.GetUniformLocation(gProgSsao, "uInvProj"), 1, GL_FALSE, glm::value_ptr(invProj));
     glx.ActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, gSceneDepth);
     drawQuad();
 
-    glx.BindFramebuffer(GL_FRAMEBUFFER, gGodFbo);
-    glViewport(0, 0, qw, qh);
-    glx.UseProgram(gProgGod);
-    glx.Uniform1i(glx.GetUniformLocation(gProgGod, "uDepth"), 0);
-    glx.Uniform2f(glx.GetUniformLocation(gProgGod, "uSunUv"), sunUv.x, sunUv.y);
-    glBindTexture(GL_TEXTURE_2D, gSceneDepth);
-    drawQuad();
+    if (godStrength > 0.05f) {
+        glx.BindFramebuffer(GL_FRAMEBUFFER, gGodFbo);
+        glViewport(0, 0, qw, qh);
+        glx.UseProgram(gProgGod);
+        glx.Uniform1i(glx.GetUniformLocation(gProgGod, "uDepth"), 0);
+        glx.Uniform2f(glx.GetUniformLocation(gProgGod, "uSunUv"), sunUv.x, sunUv.y);
+        glBindTexture(GL_TEXTURE_2D, gSceneDepth);
+        drawQuad();
+    }
 
     glx.BindFramebuffer(GL_FRAMEBUFFER, gBloomFbo[0]);
     glViewport(0, 0, qw, qh);

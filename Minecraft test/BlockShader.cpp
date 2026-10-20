@@ -16,6 +16,7 @@ static unsigned gShadowFbo = 0;
 static unsigned gShadowTex = 0;
 static glm::mat4 gShadowMat(1.0f);
 static const int kShadowSize = 1024;
+static int gShadowMapSize = 1024;
 
 static const char* kOpaqueVs = R"GLSL(
 #version 330 compatibility
@@ -91,6 +92,7 @@ uniform vec3 uCam;
 uniform sampler2D uShadowMap;
 uniform sampler2D uAlbedo;
 uniform mat4 uShadowMat;
+uniform float uShadowSize;
 
 float shadowVis(vec3 world, float ndl) {
     if (ndl < 0.02 || uSunAmt < 0.05) return 1.0;
@@ -99,7 +101,7 @@ float shadowVis(vec3 world, float ndl) {
     vec3 p = sc.xyz / sc.w;
     if (p.x < 0.0 || p.y < 0.0 || p.x > 1.0 || p.y > 1.0) return 1.0;
     float bias = 0.0012 + 0.012 * (1.0 - clamp(ndl, 0.0, 1.0));
-    vec2 texel = vec2(1.0 / 1024.0);
+    vec2 texel = vec2(1.0 / max(uShadowSize, 1.0));
     float sum = 0.0;
     sum += (texture(uShadowMap, p.xy + vec2(-texel.x, -texel.y)).r + bias > p.z) ? 1.0 : 0.0;
     sum += (texture(uShadowMap, p.xy + vec2(texel.x, -texel.y)).r + bias > p.z) ? 1.0 : 0.0;
@@ -249,13 +251,20 @@ void main() {
         return;
     }
 
+    float dist = length(vWorld.xz - uCam.xz);
+    if (dist > 96.0) {
+        vec3 farCol = mix(vec3(0.04, 0.24, 0.36), uSky * vec3(0.72, 0.88, 1.0), 0.55);
+        float fog = smoothstep(118.0, 168.0, dist);
+        farCol = mix(farCol, uSky, fog);
+        fragColor = vec4(farCol, 0.86);
+        return;
+    }
     vec2 uvA = vWorld.xz / 67.0;
     float e = 0.02;
     float hL = texture(uFft, uvA - vec2(e, 0.0)).x;
     float hR = texture(uFft, uvA + vec2(e, 0.0)).x;
     float hD = texture(uFft, uvA - vec2(0.0, e)).x;
     float hU = texture(uFft, uvA + vec2(0.0, e)).x;
-    float dist = length(vWorld.xz - uCam.xz);
     float detail = 1.0 - smoothstep(40.0, 120.0, dist);
     vec3 n = normalize(vec3((hL - hR) * detail, 1.15, (hD - hU) * detail));
     vec2 ruv = (vWorld.xz - uHeightOrigin) / max(uWorld, 1.0);
@@ -385,7 +394,14 @@ bool initBlockShaders() {
     return true;
 }
 
-void beginShadowPass(const DayNightLighting& light, const glm::vec3& focus) {
+void beginShadowPass(const DayNightLighting& light, const glm::vec3& focus, int mapSize) {
+    if (mapSize < 256) mapSize = 256;
+    if (mapSize > kShadowSize) mapSize = kShadowSize;
+    if (mapSize != gShadowMapSize) {
+        glBindTexture(GL_TEXTURE_2D, gShadowTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, mapSize, mapSize, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        gShadowMapSize = mapSize;
+    }
     glm::vec3 dir = glm::normalize(light.sunDir);
     glm::vec3 up = std::abs(dir.y) > 0.92f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
     glm::vec3 eye = focus + dir * 70.0f;
@@ -396,7 +412,7 @@ void beginShadowPass(const DayNightLighting& light, const glm::vec3& focus) {
     gShadowMat = bias * proj * view;
 
     glx.BindFramebuffer(GL_FRAMEBUFFER, gShadowFbo);
-    glViewport(0, 0, kShadowSize, kShadowSize);
+    glViewport(0, 0, gShadowMapSize, gShadowMapSize);
     glx.UseProgram(0);
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_POLYGON_OFFSET_FILL);
@@ -438,6 +454,7 @@ void bindOpaqueShader(const DayNightLighting& light, float time) {
     glx.Uniform1i(loc("uShadowMap"), 0);
     glx.Uniform1i(loc("uAlbedo"), 1);
     glx.UniformMatrix4fv(loc("uShadowMat"), 1, GL_FALSE, glm::value_ptr(gShadowMat));
+    glx.Uniform1f(loc("uShadowSize"), (float)gShadowMapSize);
     bindShadowTexture();
     glx.ActiveTexture(GL_TEXTURE1);
     glEnable(GL_TEXTURE_2D);

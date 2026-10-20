@@ -7,6 +7,7 @@
 #include "BlockShader.h"
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <unordered_map>
 #include <vector>
 
@@ -21,11 +22,36 @@ struct MeshVert {
 
 struct MeshBatch {
     unsigned tex = 0;
+    unsigned vbo = 0;
+    int count = 0;
     std::vector<MeshVert> v;
+    MeshBatch() = default;
+    MeshBatch(const MeshBatch&) = delete;
+    MeshBatch& operator=(const MeshBatch&) = delete;
+    MeshBatch(MeshBatch&& o) noexcept
+        : tex(o.tex), vbo(o.vbo), count(o.count), v(std::move(o.v)) {
+        o.vbo = 0;
+        o.count = 0;
+    }
+    MeshBatch& operator=(MeshBatch&& o) noexcept {
+        if (this != &o) {
+            if (vbo && glx.DeleteBuffers) glx.DeleteBuffers(1, &vbo);
+            tex = o.tex;
+            vbo = o.vbo;
+            count = o.count;
+            v = std::move(o.v);
+            o.vbo = 0;
+            o.count = 0;
+        }
+        return *this;
+    }
+    ~MeshBatch() {
+        if (vbo && glx.DeleteBuffers) glx.DeleteBuffers(1, &vbo);
+    }
 };
 
 static std::vector<MeshBatch>* gCap = nullptr;
-static std::vector<MeshVert>* gCapWater = nullptr;
+static MeshBatch* gCapWater = nullptr;
 
 static void pushMesh(unsigned tex, const glm::vec3& p, const glm::vec3& n, float r, float g, float b, float a,
     float t0x, float t0y, float t0z, float t0w,
@@ -33,7 +59,7 @@ static void pushMesh(unsigned tex, const glm::vec3& p, const glm::vec3& n, float
     float t2x, float t2y, float t2z, float t2w) {
     MeshVert m{ p.x, p.y, p.z, n.x, n.y, n.z, r, g, b, a, t0x, t0y, t0z, t0w, t1x, t1y, t1z, t1w, t2x, t2y, t2z, t2w };
     if (gCapWater) {
-        gCapWater->push_back(m);
+        gCapWater->v.push_back(m);
         return;
     }
     for (MeshBatch& batch : *gCap) {
@@ -361,9 +387,6 @@ static float shoreFoam(float x, float z) {
     return 0.0f;
 }
 
-static void bindMeshArrays(const MeshVert* p);
-static void unbindMeshArrays();
-
 static void drawCutoutQuad(int bx, int by, int bz, unsigned tex, const glm::vec3& n,
     const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, const glm::vec3& d,
     glm::vec2 ta, glm::vec2 tb, glm::vec2 tc, glm::vec2 td, float wind) {
@@ -473,7 +496,7 @@ struct ChunkMesh {
     std::vector<MeshBatch> opaque;
     std::vector<MeshBatch> cutout;
     std::vector<MeshBatch> leaves;
-    std::vector<MeshVert> water;
+    MeshBatch water;
 };
 
 static std::unordered_map<unsigned long long, ChunkMesh> gMeshes;
@@ -488,6 +511,24 @@ static int divFloorR(int a, int b) {
     return q;
 }
 
+static void uploadBatch(MeshBatch& batch) {
+    batch.count = (int)batch.v.size();
+    if (batch.count <= 0) {
+        if (batch.vbo) {
+            glx.DeleteBuffers(1, &batch.vbo);
+            batch.vbo = 0;
+        }
+        batch.v.clear();
+        return;
+    }
+    if (!batch.vbo) glx.GenBuffers(1, &batch.vbo);
+    glx.BindBuffer(GL_ARRAY_BUFFER, batch.vbo);
+    glx.BufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(batch.v.size() * sizeof(MeshVert)), batch.v.data(), GL_STATIC_DRAW);
+    glx.BindBuffer(GL_ARRAY_BUFFER, 0);
+    batch.v.clear();
+    batch.v.shrink_to_fit();
+}
+
 static void buildChunk(int cx, int cz) {
     ChunkMesh& chunk = gMeshes[meshKey(cx, cz)];
     chunk.cx = cx;
@@ -495,7 +536,7 @@ static void buildChunk(int cx, int cz) {
     chunk.opaque.clear();
     chunk.cutout.clear();
     chunk.leaves.clear();
-    chunk.water.clear();
+    chunk.water = MeshBatch();
     int x0 = cx * kChunk;
     int z0 = cz * kChunk;
     int x1 = x0 + kChunk - 1;
@@ -560,6 +601,13 @@ static void buildChunk(int cx, int cz) {
             pushWater(glm::vec3(fx1, h, fz0), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0);
         }
     gCapWater = nullptr;
+    auto uploadList = [](std::vector<MeshBatch>& list) {
+        for (MeshBatch& batch : list) uploadBatch(batch);
+    };
+    uploadList(chunk.opaque);
+    uploadList(chunk.leaves);
+    uploadList(chunk.cutout);
+    uploadBatch(chunk.water);
 }
 
 static int gFrame = 0;
@@ -621,6 +669,9 @@ static void updateWorldMeshes() {
     }
     std::sort(jobs.begin(), jobs.end(), [](const Job& a, const Job& b) { return a.d < b.d; });
     int cap = gMeshBudget;
+    int pending = (int)gPending.size();
+    if (cap > 0 && pending > 12) cap = 4;
+    else if (cap > 0 && pending > 4) cap = 2;
     if (cap < 1 && !jobs.empty() && jobs[0].d <= 1) cap = 1;
     int built = 0;
     for (size_t i = 0; i < jobs.size() && built < cap; ++i) {
@@ -657,25 +708,26 @@ static bool chunkVisible(int cx, int cz, int radius) {
     return dot > -0.2f;
 }
 
-static void bindMeshArrays(const MeshVert* p) {
+static void bindMeshVbo() {
+    const void* p = nullptr;
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_NORMAL_ARRAY);
     glEnableClientState(GL_COLOR_ARRAY);
-    glVertexPointer(3, GL_FLOAT, sizeof(MeshVert), &p->px);
-    glNormalPointer(GL_FLOAT, sizeof(MeshVert), &p->nx);
-    glColorPointer(4, GL_FLOAT, sizeof(MeshVert), &p->r);
+    glVertexPointer(3, GL_FLOAT, sizeof(MeshVert), (const void*)((const char*)p + offsetof(MeshVert, px)));
+    glNormalPointer(GL_FLOAT, sizeof(MeshVert), (const void*)((const char*)p + offsetof(MeshVert, nx)));
+    glColorPointer(4, GL_FLOAT, sizeof(MeshVert), (const void*)((const char*)p + offsetof(MeshVert, r)));
     glx.ClientActiveTexture(GL_TEXTURE0);
     glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-    glTexCoordPointer(4, GL_FLOAT, sizeof(MeshVert), &p->t0x);
+    glTexCoordPointer(4, GL_FLOAT, sizeof(MeshVert), (const void*)((const char*)p + offsetof(MeshVert, t0x)));
     glx.ClientActiveTexture(GL_TEXTURE1);
     glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-    glTexCoordPointer(4, GL_FLOAT, sizeof(MeshVert), &p->t1x);
+    glTexCoordPointer(4, GL_FLOAT, sizeof(MeshVert), (const void*)((const char*)p + offsetof(MeshVert, t1x)));
     glx.ClientActiveTexture(GL_TEXTURE2);
     glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-    glTexCoordPointer(4, GL_FLOAT, sizeof(MeshVert), &p->t2x);
+    glTexCoordPointer(4, GL_FLOAT, sizeof(MeshVert), (const void*)((const char*)p + offsetof(MeshVert, t2x)));
 }
 
-static void unbindMeshArrays() {
+static void unbindMeshVbo() {
     glDisableClientState(GL_VERTEX_ARRAY);
     glDisableClientState(GL_NORMAL_ARRAY);
     glDisableClientState(GL_COLOR_ARRAY);
@@ -685,26 +737,29 @@ static void unbindMeshArrays() {
     glDisableClientState(GL_TEXTURE_COORD_ARRAY);
     glx.ClientActiveTexture(GL_TEXTURE0);
     glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glx.BindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 static void drawBatches(const std::vector<MeshBatch>& batches, bool animateTorch) {
     for (const MeshBatch& batch : batches) {
-        if (batch.v.empty()) continue;
+        if (!batch.vbo || batch.count <= 0) continue;
         unsigned tex = batch.tex;
         if (animateTorch && tex == gBlockTex.torch && gBlockTex.torchAlt && (((int)(glfwGetTime() * 7.0)) & 1))
             tex = gBlockTex.torchAlt;
         bindAlbedo(tex);
-        bindMeshArrays(batch.v.data());
-        glDrawArrays(GL_QUADS, 0, (GLsizei)batch.v.size());
-        unbindMeshArrays();
+        glx.BindBuffer(GL_ARRAY_BUFFER, batch.vbo);
+        bindMeshVbo();
+        glDrawArrays(GL_QUADS, 0, batch.count);
+        unbindMeshVbo();
     }
 }
 
-static void drawWaterMesh(const std::vector<MeshVert>& water) {
-    if (water.empty()) return;
-    bindMeshArrays(water.data());
-    glDrawArrays(GL_QUADS, 0, (GLsizei)water.size());
-    unbindMeshArrays();
+static void drawWaterMesh(const MeshBatch& water) {
+    if (!water.vbo || water.count <= 0) return;
+    glx.BindBuffer(GL_ARRAY_BUFFER, water.vbo);
+    bindMeshVbo();
+    glDrawArrays(GL_QUADS, 0, water.count);
+    unbindMeshVbo();
 }
 
 void clearWorldMeshes() {
@@ -764,11 +819,12 @@ void renderShadowCasters(int renderRadiusXZ, int) {
     for (auto it = gMeshes.begin(); it != gMeshes.end(); ++it) {
         if (!chunkVisible(it->second.cx, it->second.cz, plantRadius)) continue;
         for (const MeshBatch& batch : it->second.cutout) {
-            if (!plantShadowTex(batch.tex) || batch.v.empty()) continue;
+            if (!plantShadowTex(batch.tex) || !batch.vbo || batch.count <= 0) continue;
             bindAlbedo(batch.tex);
-            bindMeshArrays(batch.v.data());
-            glDrawArrays(GL_QUADS, 0, (GLsizei)batch.v.size());
-            unbindMeshArrays();
+            glx.BindBuffer(GL_ARRAY_BUFFER, batch.vbo);
+            bindMeshVbo();
+            glDrawArrays(GL_QUADS, 0, batch.count);
+            unbindMeshVbo();
         }
     }
 }
