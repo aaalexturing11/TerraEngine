@@ -199,6 +199,53 @@ uniform sampler2D uShadowMap;
 uniform mat4 uShadowMat;
 uniform float uWorld;
 uniform vec2 uHeightOrigin;
+uniform vec4 uRings[8];
+uniform vec4 uWake[16];
+uniform vec4 uWakeDir[16];
+
+float ringsH(vec2 p, inout float crest) {
+    float h = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        float amp = uRings[i].w;
+        if (amp < 0.001) continue;
+        float t = uTime - uRings[i].z;
+        if (t < 0.0 || t > 4.6) continue;
+        float dist = length(p - uRings[i].xy);
+        float behind = t * 5.4 - dist;
+        if (behind < 0.0 || behind > 8.0) continue;
+        float env = exp(-behind * 0.26) * exp(-t * 0.30) * smoothstep(0.0, 0.2, behind);
+        float s = sin(behind * 6.6);
+        h += s * env * amp;
+        h -= exp(-dist * dist * 2.4) * exp(-t * 1.7) * amp;
+        crest += smoothstep(0.45, 1.0, s) * env * amp * 5.0;
+    }
+    return h;
+}
+
+float wakeH(vec2 p, inout float foam) {
+    float h = 0.0;
+    for (int i = 0; i < 16; ++i) {
+        if (uWake[i].w < 0.5) continue;
+        float age = uTime - uWake[i].z;
+        if (age < 0.0 || age > 4.2) continue;
+        vec2 d = p - uWake[i].xy;
+        vec2 fwd = uWakeDir[i].xy;
+        float lat = d.x * -fwd.y + d.y * fwd.x;
+        float al = dot(d, fwd);
+        float fade = exp(-age * 0.55);
+        foam += exp(-dot(d, d) * 1.15) * fade;
+        h += sin(lat * 6.5 - age * 7.5) * exp(-lat * lat * 0.85) * exp(-al * al * 0.7) * fade * 0.05;
+        float v = abs(abs(lat) - max(-al, 0.0) * 0.58);
+        h += sin(v * 4.6 - age * 6.0) * exp(-v * 0.72) * smoothstep(0.08, 0.9, -al) * fade * 0.035;
+    }
+    return h;
+}
+
+float motionH(vec2 p) {
+    float c = 0.0;
+    float f = 0.0;
+    return ringsH(p, c) + wakeH(p, f);
+}
 
 float linearDepth(float d) {
     float z = d * 2.0 - 1.0;
@@ -280,6 +327,18 @@ void main() {
     float hz = texture(uRipple, ruv + vec2(0.0, re)).r - texture(uRipple, ruv - vec2(0.0, re)).r;
     n = normalize(n + vec3(-hx, 0.0, -hz) * detail * 0.8);
 
+    float splashCrest = 0.0;
+    float wakeFoam = 0.0;
+    if (dist < 78.0) {
+        float e = 0.11;
+        vec2 p = vWorld.xz;
+        ringsH(p, splashCrest);
+        wakeH(p, wakeFoam);
+        float hxM = motionH(p - vec2(e, 0.0)) - motionH(p + vec2(e, 0.0));
+        float hzM = motionH(p - vec2(0.0, e)) - motionH(p + vec2(0.0, e));
+        n = normalize(n + vec3(hxM, 0.0, hzM) * 4.2);
+    }
+
     vec3 view = normalize(uCam - vWorld);
     vec2 uv = gl_FragCoord.xy / vec2(textureSize(uScene, 0));
     vec2 distort = n.xz * (0.004 + 0.006 * detail);
@@ -311,6 +370,8 @@ void main() {
     float occ = texture(uHeight, ruv).g;
     float shore = (1.0 - smoothstep(0.15, 0.72, occ)) * shallow;
     col = mix(col, vec3(0.72, 0.90, 0.92), shore * 0.28);
+    col += vec3(0.90, 0.97, 1.0) * clamp(splashCrest, 0.0, 0.85) * 0.7;
+    col = mix(col, vec3(0.82, 0.96, 0.98), clamp(wakeFoam * 0.16, 0.0, 0.36));
     float fog = smoothstep(118.0, 168.0, dist);
     col = mix(col, uSky, fog);
     float alpha = mix(0.90, 0.62, shallow);
@@ -499,6 +560,7 @@ void bindWaterShader(const glm::mat4& viewProj, const glm::vec3& camPos, const g
     fluidHeightOrigin(ox, oz);
     glx.Uniform2f(loc("uHeightOrigin"), ox, oz);
     glx.UniformMatrix4fv(loc("uShadowMat"), 1, GL_FALSE, glm::value_ptr(gShadowMat));
+    fluidBindMotion(gWater);
     fluidBindHeight(4);
     fluidBindRipple(5);
     fluidBindFft(7);

@@ -158,6 +158,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             setMeshBudget(1);
             fluidSetHeavy(generated == 0);
             fluidSetView((float)camX, (float)camZ);
+            fluidSetClock(time);
             if (!uiOpen) {
                 updateSelectedBlock(window);
                 tickWater((float)(frameStart - lastFrameTime));

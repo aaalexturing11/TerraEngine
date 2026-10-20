@@ -2,7 +2,10 @@
 
 void fluidImpact(float x, float y, float z, float speed, float mass);
 void fluidWake(float x, float z, float vx, float vz);
+void fluidSetClock(float time);
 void fluidTick(float dt);
+void fluidBindMotion(unsigned program);
+void fluidCopyLens(float* lens, float* extra, int maxN);
 void fluidSetHeavy(bool enabled);
 void fluidDraw();
 void fluidBindRipple(int unit);

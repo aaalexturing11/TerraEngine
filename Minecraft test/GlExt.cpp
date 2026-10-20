@@ -30,6 +30,7 @@ bool initGlExtensions() {
     glx.Uniform1f = loadProc<PFNGLUNIFORM1FPROC>("glUniform1f");
     glx.Uniform2f = loadProc<PFNGLUNIFORM2FPROC>("glUniform2f");
     glx.Uniform3f = loadProc<PFNGLUNIFORM3FPROC>("glUniform3f");
+    glx.Uniform4fv = loadProc<PFNGLUNIFORM4FVPROC>("glUniform4fv");
     glx.UniformMatrix4fv = loadProc<PFNGLUNIFORMMATRIX4FVPROC>("glUniformMatrix4fv");
     glx.GenFramebuffers = loadProc<PFNGLGENFRAMEBUFFERSPROC>("glGenFramebuffers");
     glx.BindFramebuffer = loadProc<PFNGLBINDFRAMEBUFFERPROC>("glBindFramebuffer");
@@ -49,7 +50,7 @@ bool initGlExtensions() {
     glx.GenVertexArrays = loadProc<PFNGLGENVERTEXARRAYSPROC>("glGenVertexArrays");
     glx.DeleteVertexArrays = loadProc<PFNGLDELETEVERTEXARRAYSPROC>("glDeleteVertexArrays");
     glx.BindVertexArray = loadProc<PFNGLBINDVERTEXARRAYPROC>("glBindVertexArray");
-    return glx.CreateShader && glx.GenFramebuffers && glx.UseProgram && glx.BlitFramebuffer && glx.MultiTexCoord4f && glx.GenBuffers && glx.GenVertexArrays;
+    return glx.CreateShader && glx.GenFramebuffers && glx.UseProgram && glx.BlitFramebuffer && glx.MultiTexCoord4f && glx.GenBuffers && glx.GenVertexArrays && glx.Uniform4fv;
 }
 
 static unsigned compileStage(unsigned type, const char* src) {

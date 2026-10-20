@@ -17,6 +17,122 @@ struct Drop {
 
 static std::vector<Drop> gDrops;
 static unsigned gRng = 1u;
+static float gClock = 0.0f;
+static float rnd();
+
+struct Impulse { float x, z, birth, amp; };
+static Impulse gRings[8];
+static int gRingCursor = 0;
+
+struct Trail { float x, z, birth, hx, hz; };
+static Trail gTrail[16];
+static int gTrailCursor = 0;
+static int gTrailCount = 0;
+static float gTrailX = 0.0f;
+static float gTrailZ = 0.0f;
+static bool gTrailHas = false;
+
+struct Lens {
+    float u, v, r, alpha;
+    float vu, vv;
+    float hold, age, life;
+    float restV, stretch;
+    int phase;
+};
+static Lens gLens[12];
+static int gLensN = 0;
+
+static void pushRing(float x, float z, float when, float amp) {
+    if (amp < 0.02f) return;
+    if (amp > 0.22f) amp = 0.22f;
+    gRings[gRingCursor].x = x;
+    gRings[gRingCursor].z = z;
+    gRings[gRingCursor].birth = when;
+    gRings[gRingCursor].amp = amp;
+    gRingCursor = (gRingCursor + 1) % 8;
+}
+
+static void pushLensDrop(bool fromTop, float sizeMul) {
+    int slot = gLensN;
+    if (slot >= 12) {
+        slot = 0;
+        float oldest = -1.0f;
+        for (int i = 0; i < 12; ++i) {
+            float t = gLens[i].age / gLens[i].life;
+            if (t > oldest) { oldest = t; slot = i; }
+        }
+    }
+    else gLensN++;
+    Lens& d = gLens[slot];
+    d.u = 0.08f + rnd() * 0.84f;
+    d.vu = (rnd() - 0.5f) * 0.04f;
+    d.r = (0.016f + rnd() * 0.038f) * sizeMul;
+    d.alpha = 0.82f + rnd() * 0.18f;
+    d.hold = 0.35f + rnd() * 0.85f;
+    d.age = 0.0f;
+    d.life = 3.4f + rnd() * 2.2f;
+    d.stretch = 0.0f;
+    d.vv = 0.0f;
+    if (fromTop) {
+        d.v = 1.04f + rnd() * 0.45f;
+        d.vv = -0.42f - rnd() * 0.55f;
+        d.restV = 0.18f + rnd() * 0.68f;
+        d.phase = 0;
+    }
+    else {
+        d.v = 0.15f + rnd() * 0.72f;
+        d.restV = d.v;
+        d.phase = 1;
+    }
+}
+
+static void spawnLens(float strength) {
+    if (strength < 0.2f) strength = 0.2f;
+    if (strength > 1.4f) strength = 1.4f;
+    int n = 6 + (int)(strength * 6.0f);
+    if (n > 12) n = 12;
+    for (int i = 0; i < n; ++i)
+        pushLensDrop(rnd() < 0.7f, 0.75f + strength * 0.45f);
+}
+
+static void tickLens(float dt) {
+    int w = 0;
+    for (int i = 0; i < gLensN; ++i) {
+        Lens d = gLens[i];
+        d.age += dt;
+        if (d.v < -0.06f || d.alpha < 0.04f) continue;
+        if (d.phase != 0 && d.age > d.life) continue;
+        if (d.phase == 0) {
+            d.v += d.vv * dt;
+            d.u += d.vu * dt;
+            if (d.v <= d.restV) {
+                d.v = d.restV;
+                d.vv = 0.0f;
+                d.phase = 1;
+                d.age = 0.0f;
+            }
+        }
+        else if (d.phase == 1) {
+            if (d.age > d.hold) {
+                d.phase = 2;
+                d.vv = -0.015f - rnd() * 0.02f;
+            }
+        }
+        else {
+            d.vv -= 0.28f * dt;
+            if (d.vv < -0.22f) d.vv = -0.22f;
+            d.v += d.vv * dt;
+            d.u += d.vu * dt;
+            d.stretch += (-d.vv) * dt * 0.85f;
+            if (d.stretch > 0.22f) d.stretch = 0.22f;
+            d.alpha -= dt * 0.22f;
+            d.r *= (1.0f - 0.10f * dt);
+        }
+        if (d.u < -0.05f || d.u > 1.05f) continue;
+        gLens[w++] = d;
+    }
+    gLensN = w;
+}
 
 static float rnd() {
     gRng = gRng * 1664525u + 1013904223u;
@@ -400,10 +516,27 @@ void fluidBindHeight(int unit) {
     glx.ActiveTexture(GL_TEXTURE0);
 }
 
+void fluidSetClock(float time) { gClock = time; }
+
 void fluidWake(float x, float z, float vx, float vz) {
     float sp = std::sqrt(vx * vx + vz * vz);
-    if (sp < 0.35f) return;
-    rippleDisturb(x, z, 0.22f + sp * 0.05f, 0.045f + sp * 0.012f);
+    if (sp < 0.55f) return;
+    rippleDisturb(x, z, 0.35f + sp * 0.04f, 0.03f + sp * 0.006f);
+    float dx = x - gTrailX;
+    float dz = z - gTrailZ;
+    if (!gTrailHas || dx * dx + dz * dz > 0.42f * 0.42f) {
+        Trail& t = gTrail[gTrailCursor];
+        t.x = x;
+        t.z = z;
+        t.birth = gClock;
+        t.hx = vx / sp;
+        t.hz = vz / sp;
+        gTrailCursor = (gTrailCursor + 1) % 16;
+        if (gTrailCount < 16) gTrailCount++;
+        gTrailX = x;
+        gTrailZ = z;
+        gTrailHas = true;
+    }
     static float dropAcc = 0.0f;
     dropAcc += sp * 0.02f;
     if (dropAcc > 1.0f) {
@@ -424,6 +557,16 @@ void fluidImpact(float x, float y, float z, float speed, float mass) {
     float radius = 0.28f + std::sqrt(mass) * 0.04f;
     if (radius > 0.85f) radius = 0.85f;
     rippleDisturb(x, z, radius, sink);
+    float amp = 0.07f + speed * 0.008f;
+    if (amp > 0.18f) amp = 0.18f;
+    pushRing(x, z, gClock, amp);
+    for (int i = 0; i < 3; ++i) {
+        float ang = rnd() * 6.2831853f;
+        float rad = 0.25f + rnd() * 0.7f;
+        pushRing(x + std::cos(ang) * rad, z + std::sin(ang) * rad, gClock + 0.06f + rnd() * 0.12f, amp * 0.42f);
+    }
+    if (speed >= 3.0f)
+        spawnLens((speed - 2.0f) / 7.0f);
 
     int count = (int)(energy / 160.0f);
     if (count < 6) count = 6;
@@ -500,6 +643,7 @@ void fluidTick(float dt) {
         gDrops[w++] = d;
     }
     gDrops.resize(w);
+    tickLens(dt);
 
     gFftTime += dt;
     gFftClock += dt;
@@ -562,4 +706,58 @@ void fluidDraw() {
     }
     glEnd();
     glDepthMask(GL_TRUE);
+}
+
+void fluidBindMotion(unsigned program) {
+    float rings[8 * 4] = {};
+    for (int i = 0; i < 8; ++i) {
+        float age = gClock - gRings[i].birth;
+        bool live = gRings[i].amp > 0.001f && age > -0.2f && age < 5.0f;
+        rings[i * 4 + 0] = gRings[i].x;
+        rings[i * 4 + 1] = gRings[i].z;
+        rings[i * 4 + 2] = gRings[i].birth;
+        rings[i * 4 + 3] = live ? gRings[i].amp : 0.0f;
+    }
+    float wake[16 * 4] = {};
+    float dir[16 * 4] = {};
+    int n = 0;
+    for (int i = 0; i < gTrailCount && n < 16; ++i) {
+        const Trail& t = gTrail[i];
+        float age = gClock - t.birth;
+        if (age < 0.0f || age > 4.4f) continue;
+        wake[n * 4 + 0] = t.x;
+        wake[n * 4 + 1] = t.z;
+        wake[n * 4 + 2] = t.birth;
+        wake[n * 4 + 3] = 1.0f;
+        dir[n * 4 + 0] = t.hx;
+        dir[n * 4 + 1] = t.hz;
+        ++n;
+    }
+    auto loc = [&](const char* name) { return glx.GetUniformLocation(program, name); };
+    int r = loc("uRings");
+    int w = loc("uWake");
+    int d = loc("uWakeDir");
+    if (r >= 0) glx.Uniform4fv(r, 8, rings);
+    if (w >= 0) glx.Uniform4fv(w, 16, wake);
+    if (d >= 0) glx.Uniform4fv(d, 16, dir);
+}
+
+void fluidCopyLens(float* lens, float* extra, int maxN) {
+    for (int i = 0; i < maxN; ++i) {
+        lens[i * 4 + 0] = 0.0f;
+        lens[i * 4 + 1] = 0.0f;
+        lens[i * 4 + 2] = 0.0f;
+        lens[i * 4 + 3] = 0.0f;
+        extra[i * 4 + 0] = 0.0f;
+        extra[i * 4 + 1] = 0.0f;
+        extra[i * 4 + 2] = 0.0f;
+        extra[i * 4 + 3] = 0.0f;
+        if (i >= gLensN) continue;
+        const Lens& d = gLens[i];
+        lens[i * 4 + 0] = d.u;
+        lens[i * 4 + 1] = d.v;
+        lens[i * 4 + 2] = d.r;
+        lens[i * 4 + 3] = d.alpha;
+        extra[i * 4 + 0] = d.stretch;
+    }
 }
