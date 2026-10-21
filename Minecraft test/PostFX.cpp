@@ -146,9 +146,32 @@ void main() {
     if (uUnder > 0.5) {
         float fog = smoothstep(0.2, 0.86, depth);
         col = mix(col, vec3(0.02, 0.13, 0.20), 0.12 + fog * 0.48);
-        float c1 = sin(vUv.x * 48.0 + uTime * 0.6) * sin(vUv.y * 41.0 - uTime * 0.45);
-        float cau = 0.9 + 0.1 * c1;
-        col *= mix(1.0, cau, 0.22 * uDay);
+        float day = smoothstep(0.08, 0.5, uDay) * uGodStrength;
+        float lum = dot(col, vec3(0.25, 0.6, 0.15));
+        float openSky = smoothstep(0.025, 0.14, lum);
+        float depthFade = 1.0 - smoothstep(0.28, 0.84, depth);
+        vec2 sun = uSunUv;
+        vec2 aim = sun - vec2(0.5);
+        float aimLen = length(aim);
+        vec2 dir = aimLen > 0.02 ? aim / aimLen : vec2(0.15, 0.9);
+        vec2 side = vec2(-dir.y, dir.x);
+        float along = dot(vUv, dir);
+        float across = dot(vUv, side);
+        float shafts = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            float fi = float(i);
+            float lane = sin(fi * 2.4 + 1.7) * 0.55 + sin(uTime * 0.05 + fi * 1.3) * 0.06;
+            float width = 0.09 + 0.045 * sin(fi * 1.9 + 0.4);
+            float off = across - lane;
+            float beam = exp(-(off * off) / (width * width));
+            float fluff = 0.55 + 0.45 * sin(along * 2.2 + uTime * 0.11 + fi * 1.8);
+            fluff *= 0.75 + 0.25 * sin(across * 1.4 - uTime * 0.07 + fi);
+            shafts += beam * fluff;
+        }
+        float toward = exp(-max(length(vUv - sun) - 0.08, 0.0) * 0.65);
+        float glow = shafts * 0.22 + toward * 0.55;
+        vec3 rayCol = mix(vec3(0.62, 0.9, 0.84), vec3(1.0, 0.9, 0.7), clamp(uDusk, 0.0, 1.0));
+        col += rayCol * glow * openSky * depthFade * day * 0.16;
     } else {
         vec3 godCol = mix(vec3(0.85, 0.93, 1.0), vec3(1.0, 0.55, 0.22), clamp(uDusk, 0.0, 1.0));
         float sunDist = length(vUv - uSunUv);

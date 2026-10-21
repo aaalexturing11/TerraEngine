@@ -114,7 +114,6 @@ void main() {
     vec3 n = normalize(vNormal);
     float sky = clamp(vPack.x, 0.0, 1.0);
     float emit = vPack.y;
-    float cau = vPack.z;
     float ao = vPack.w;
     float lamp = clamp(vLamp, 0.0, 1.0);
     vec3 sunD = normalize(uSunDir);
@@ -141,10 +140,8 @@ void main() {
     vec3 sun = albedo * uSunColor * wrap * vis * skyVis * uSunAmt;
     vec3 shadowSky = albedo * uSky * (1.0 - vis) * skyVis * 0.22 * uSunAmt;
     vec3 moon = albedo * uMoonColor * ndm * (0.35 + 0.65 * hemi) * ao * skyVis;
-    float wave = 0.6 + 0.4 * sin(uTime * 2.5 + vWorld.x * 7.5 + vWorld.z * 6.5);
-    vec3 caustics = vec3(0.55, 0.95, 0.90) * cau * wave * uSunAmt * skyVis * 0.85;
     vec3 glow = albedo * emit * 2.6;
-    vec3 col = indirect + lampCol + sun + shadowSky + moon + caustics + glow;
+    vec3 col = indirect + lampCol + sun + shadowSky + moon + glow;
     float fog = smoothstep(118.0, 168.0, length(vWorld.xz - uCam.xz));
     col = mix(col, uSky, fog);
     fragColor = vec4(col, alpha);
