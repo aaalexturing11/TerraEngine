@@ -52,8 +52,12 @@ void updateSelectedBlock(GLFWwindow* window) {
     hasSelected = false;
     hitNormal = glm::ivec3(0);
     float dist = 0.0f;
+    auto selectable = [](int x, int y, int z) {
+        Block b = blockAt(x, y, z);
+        return b != Block::Air && b != Block::Water;
+    };
 
-    if (occupied(voxel.x, voxel.y, voxel.z)) {
+    if (selectable(voxel.x, voxel.y, voxel.z)) {
         selectedBlock = voxel;
         hasSelected = true;
         return;
@@ -71,7 +75,7 @@ void updateSelectedBlock(GLFWwindow* window) {
 
         if (dist > maxDist) break;
 
-        if (occupied(voxel.x, voxel.y, voxel.z)) {
+        if (selectable(voxel.x, voxel.y, voxel.z)) {
             selectedBlock = voxel;
             hasSelected = true;
             hitNormal = glm::ivec3(0);
@@ -145,6 +149,7 @@ const char* selectedPlaceName() {
 void handleMouseClick(GLFWwindow*, int button, int action, int) {
     if (gInventory || paused || !gameMenuInWorld() || action != GLFW_PRESS || !hasSelected) return;
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
+        if (blockAt(selectedBlock.x, selectedBlock.y, selectedBlock.z) == Block::Water) return;
         setBlock(selectedBlock.x, selectedBlock.y, selectedBlock.z, Block::Air);
     }
     else {

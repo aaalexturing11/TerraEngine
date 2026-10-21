@@ -167,7 +167,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             fluidSetClock(time);
             if (!uiOpen) {
                 updateSelectedBlock(window);
-                tickWater((float)(frameStart - lastFrameTime));
+                tickWater((float)(frameStart - lastFrameTime), time);
                 fluidTick((float)(frameStart - lastFrameTime));
             }
         }

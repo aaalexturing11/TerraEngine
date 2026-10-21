@@ -67,13 +67,14 @@ float sampleSkyForFace(int bx, int by, int bz, float nx, float ny, float nz);
 float sampleLampForFace(int bx, int by, int bz, float nx, float ny, float nz);
 float causticAmount(int x, int y, int z);
 
-void tickWater(float dt);
+void tickWater(float dt, float time);
 void waterImpact(int x, int y, int z, float vy, float mass);
 
 int waterLevelAt(int x, int y, int z);
 float waterFill01(int x, int y, int z);
 float waterSurfaceY(int x, int z);
 bool waterHasSurface(int x, int z);
+bool waterVisualAt(int x, int z, float& fromH, float& toH, float& startTime, float& duration);
 bool waterHasFall(int x, int z);
 float waterFallTopY(int x, int z);
 float waterFallBotY(int x, int z);

@@ -173,6 +173,14 @@ void swell(inout vec3 p, inout vec3 n, vec2 dir, float amp, float len) {
 
 void main() {
     vec3 p = gl_Vertex.xyz;
+    float yDelta = gl_MultiTexCoord1.z;
+    float growT = gl_MultiTexCoord1.w;
+    float growDur = max(gl_MultiTexCoord2.y, 0.05);
+    if (abs(yDelta) > 0.0001) {
+        float u = clamp((uTime - growT) / growDur, 0.0, 1.0);
+        u = u * u * (3.0 - 2.0 * u);
+        p.y += yDelta * (1.0 - u);
+    }
     vFlow = gl_MultiTexCoord0;
     vAcross = gl_MultiTexCoord1.x;
     vLip = gl_MultiTexCoord1.y;
@@ -181,6 +189,21 @@ void main() {
     vOpen = 0.0;
     vWaveN = gl_Normal;
     float wgt = gl_MultiTexCoord2.x;
+    if (gl_Normal.y > 0.45 && wgt <= 0.01) {
+        float flow = clamp(length(vFlow.xy), 0.0, 1.0);
+        float amp = mix(0.05, 0.082, flow);
+        float f1 = p.x * 1.37 + p.z * 0.81 + uTime * 1.05;
+        float f2 = -p.x * 0.53 + p.z * 1.83 - uTime * 0.82;
+        float f3 = p.x * 0.62 + p.z * 0.71 + uTime * 0.55;
+        float h = sin(f1) * 0.50 + sin(f2) * 0.32 + sin(f3) * 0.18;
+        p.y += h * amp;
+        float dx = cos(f1) * 1.37 * 0.50 + cos(f2) * (-0.53) * 0.32 + cos(f3) * 0.62 * 0.18;
+        float dz = cos(f1) * 0.81 * 0.50 + cos(f2) * 1.83 * 0.32 + cos(f3) * 0.71 * 0.18;
+        vec3 n = vec3(-dx * amp, 1.0, -dz * amp);
+        n.xz -= vFlow.xy * flow * 0.1;
+        vWaveN = normalize(n);
+        vOpen = 0.55 + flow * 0.35;
+    }
     if (wgt > 0.01) {
         float baseY = p.y;
         vOpen = wgt;
@@ -280,13 +303,6 @@ void main() {
     vec3 geo = normalize(vNormal);
     bool surface = geo.y > 0.45;
     if (!surface) {
-        if (geo.y < -0.45) {
-            vec3 view = normalize(uCam - vWorld);
-            float fres = pow(1.0 - abs(dot(geo, view)), 3.0);
-            vec3 col = mix(vec3(0.02, 0.16, 0.28), vec3(0.62, 0.86, 0.94), fres * 0.5);
-            fragColor = vec4(col, 0.8);
-            return;
-        }
         if (vFlow.z > 2.5) {
             vec2 uv = vec2(vAcross, vLip);
             float d = length(uv - 0.5) * 2.0;
@@ -296,19 +312,27 @@ void main() {
             fragColor = vec4(col, 0.86 * rim * clamp(vFlow.w, 0.2, 1.0));
             return;
         }
+        vec2 uv = gl_FragCoord.xy / vec2(textureSize(uScene, 0));
+        float sceneD = texture(uDepth, uv).r;
+        float thick = sceneD > 0.998 ? 6.0 : max(linearDepth(sceneD) - linearDepth(gl_FragCoord.z), 0.0);
+        float deep = smoothstep(0.2, 4.2, thick);
+        bool falling = vFlow.z > 0.45 && vFlow.z < 1.6;
+        float slide = falling ? 1.0 : 0.28;
+        float band = 0.5 + 0.5 * sin(vWorld.y * (falling ? 2.1 : 0.55) + vWorld.x * 0.35 - uTime * (falling ? 2.4 : 0.45));
+        band = smoothstep(0.2, 0.85, band);
+        vec2 distort = geo.xz * (0.006 + slide * 0.004);
+        distort.y += (band - 0.5) * 0.006 * slide;
+        vec3 refr = texture(uScene, clamp(uv + distort, vec2(0.001), vec2(0.999))).rgb;
+        vec3 tint = mix(vec3(0.12, 0.48, 0.62), vec3(0.02, 0.16, 0.32), deep);
         vec3 view = normalize(uCam - vWorld);
         float fres = pow(1.0 - abs(dot(geo, view)), 3.0);
-        vec3 col = mix(vec3(0.02, 0.28, 0.42), uSky * vec3(0.70, 0.88, 1.0), fres * 0.58);
-        if (vFlow.z > 0.45 && vFlow.z < 1.6) {
-            float along = fract(vWorld.y * 1.65 - uTime * 2.6);
-            float streak = smoothstep(0.0, 0.12, along) * smoothstep(0.62, 0.22, along);
-            float edge = abs(vAcross * 2.0 - 1.0);
-            col += vec3(0.12, 0.22, 0.24) * streak * 0.55;
-            float alpha = 0.62 * (1.0 - edge * 0.28) * (0.82 + streak * 0.22);
-            fragColor = vec4(col, clamp(alpha, 0.4, 0.78));
-            return;
-        }
-        fragColor = vec4(col, 0.62);
+        vec3 col = mix(refr, tint, mix(0.22, 0.62, deep));
+        col = mix(col, uSky * vec3(0.72, 0.88, 1.0), fres * 0.28);
+        if (falling) col += vec3(0.55, 0.82, 0.9) * band * 0.18;
+        float alpha = mix(0.22, 0.55, deep);
+        if (geo.y < -0.45) alpha = mix(0.45, 0.72, deep);
+        if (falling) alpha = mix(alpha, 0.48, 0.35);
+        fragColor = vec4(col, alpha);
         return;
     }
 
@@ -329,7 +353,7 @@ void main() {
     }
 
     float dist = length(vWorld.xz - uCam.xz);
-    vec2 uvA = vWorld.xz / 16.0;
+    vec2 uvA = (vWorld.xz + vFlow.xy * uTime * 0.55 * clamp(vFlow.w, 0.0, 1.0)) / 16.0;
     float e = 0.035;
     float hL = texture(uFft, uvA - vec2(e, 0.0)).x;
     float hR = texture(uFft, uvA + vec2(e, 0.0)).x;
@@ -347,9 +371,8 @@ void main() {
     vec3 H = normalize(L + view);
     float ndv = max(dot(n, view), 0.0);
     float ndh = max(dot(n, H), 0.0);
-    float fresnel = 0.02 + 0.62 * pow(1.0 - ndv, 5.0);
-    float spark = smoothstep(0.42, 0.9, fract(sin(dot(floor(vWorld.xz * 1.7), vec2(12.9, 78.2))) * 43758.5));
-    vec3 glint = vec3(1.0, 0.98, 0.92) * uSunAmt * (pow(ndh, 7.0) * 0.16 + pow(ndh, 90.0) * (0.25 + spark) * 1.15);
+    float fresnel = 0.03 + 0.72 * pow(1.0 - ndv, 4.0);
+    vec3 glint = vec3(1.0, 0.98, 0.92) * uSunAmt * (pow(ndh, 10.0) * 0.34 + pow(ndh, 42.0) * 0.72);
     glint *= 1.0 - smoothstep(150.0, 210.0, dist);
 
     if (dist > 88.0) {
@@ -382,14 +405,14 @@ void main() {
 
     float sceneD = texture(uDepth, uv).r;
     float thick = sceneD > 0.998 ? 14.0 : max(linearDepth(sceneD) - linearDepth(gl_FragCoord.z), 0.0);
-    float shallow = 1.0 - smoothstep(0.4, 2.2, thick);
-    float absorb = mix(clamp(0.62 + thick * 0.04, 0.62, 0.92), 0.18, shallow);
+    float shallow = 1.0 - smoothstep(0.35, 5.5, thick);
+    float absorb = mix(clamp(0.5 + thick * 0.045, 0.5, 0.9), 0.12, shallow);
 
     ndv = max(dot(n, view), 0.0);
-    fresnel = 0.02 + 0.62 * pow(1.0 - ndv, 5.0);
+    fresnel = 0.03 + 0.72 * pow(1.0 - ndv, 4.0);
     H = normalize(L + view);
     ndh = max(dot(n, H), 0.0);
-    glint = vec3(1.0, 0.98, 0.92) * uSunAmt * (pow(ndh, 7.0) * 0.16 + pow(ndh, 90.0) * (0.25 + spark) * 1.15);
+    glint = vec3(1.0, 0.98, 0.92) * uSunAmt * (pow(ndh, 10.0) * 0.34 + pow(ndh, 42.0) * 0.72);
 
     vec3 deep = mix(vec3(0.015, 0.12, 0.22), vec3(0.05, 0.32, 0.38), shallow);
     vec3 refr = mix(texture(uScene, texCoordRefract).rgb, deep, absorb);

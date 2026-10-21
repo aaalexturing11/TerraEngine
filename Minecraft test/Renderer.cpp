@@ -307,15 +307,15 @@ static void sampleFlowXZ(int x, int z, float& fx, float& fz, float& down) {
     waterFlow(x, y, z, fx, fz, down);
 }
 
-static void pushWater(const glm::vec3& p, const glm::vec3& n, float fx, float fz, float kind, float strength, float across, float lipY, float wave) {
+static void pushWater(const glm::vec3& p, const glm::vec3& n, float fx, float fz, float kind, float strength, float across, float lipY, float wave, float yDelta = 0.0f, float t0 = 0.0f, float dur = 0.05f) {
     if (gCapWater) {
-        pushMesh(0, p, n, 1, 1, 1, 1, fx, fz, kind, strength, across, lipY, 0, 0, wave, 0, 0, 0);
+        pushMesh(0, p, n, 1, 1, 1, 1, fx, fz, kind, strength, across, lipY, yDelta, t0, wave, dur, 0, 0);
         return;
     }
     glNormal3f(n.x, n.y, n.z);
     glTexCoord4f(fx, fz, kind, strength);
-    glx.MultiTexCoord4f(GL_TEXTURE1, across, lipY, 0, 0);
-    glx.MultiTexCoord4f(GL_TEXTURE2, wave, 0, 0, 0);
+    glx.MultiTexCoord4f(GL_TEXTURE1, across, lipY, yDelta, t0);
+    glx.MultiTexCoord4f(GL_TEXTURE2, wave, dur, 0, 0);
     glVertex3f(p.x, p.y, p.z);
 }
 
@@ -325,7 +325,8 @@ static bool cellOpen(int x, int y, int z) {
 }
 
 static void drawWaterFace(float x0, float z0, float x1, float z1, float y0, float y1,
-    float fx, float fz, float kind, float strength, float lipY, float waveLo, float waveHi) {
+    float fx, float fz, float kind, float strength, float lipY, float waveLo, float waveHi,
+    float yDelta = 0.0f, float t0 = 0.0f, float dur = 0.05f) {
     glm::vec3 edge(x1 - x0, 0.0f, z1 - z0);
     glm::vec3 n = glm::cross(edge, glm::vec3(0, 1, 0));
     float len = glm::length(n);
@@ -333,8 +334,8 @@ static void drawWaterFace(float x0, float z0, float x1, float z1, float y0, floa
     else n /= len;
     pushWater(glm::vec3(x0, y0, z0), n, fx, fz, kind, strength, 0, lipY, waveLo);
     pushWater(glm::vec3(x1, y0, z1), n, fx, fz, kind, strength, 1, lipY, waveLo);
-    pushWater(glm::vec3(x1, y1, z1), n, fx, fz, kind, strength, 1, lipY, waveHi);
-    pushWater(glm::vec3(x0, y1, z0), n, fx, fz, kind, strength, 0, lipY, waveHi);
+    pushWater(glm::vec3(x1, y1, z1), n, fx, fz, kind, strength, 1, lipY, waveHi, yDelta, t0, dur);
+    pushWater(glm::vec3(x0, y1, z0), n, fx, fz, kind, strength, 0, lipY, waveHi, yDelta, t0, dur);
 }
 
 static float clampCeil(int x, int z, float h) {
@@ -396,14 +397,14 @@ static float waterBodyBottom(int x, int z, float topH) {
     return (float)y;
 }
 
-static void waterSideQuad(int x, int z, int dx, int dz, float y0, float y1, float kind, float waveLo, float waveHi) {
+static void waterSideQuad(int x, int z, int dx, int dz, float y0, float y1, float kind, float waveLo, float waveHi, float yDelta = 0.0f, float t0 = 0.0f, float dur = 0.05f) {
     if (y1 <= y0 + 0.08f) return;
     float x0, z0, x1, z1;
     if (dx == 1) { x0 = (float)x + 1.0f; z0 = (float)z + 1.0f; x1 = x0; z1 = (float)z; }
     else if (dx == -1) { x0 = (float)x; z0 = (float)z; x1 = x0; z1 = (float)z + 1.0f; }
     else if (dz == 1) { x0 = (float)x; z0 = (float)z + 1.0f; x1 = (float)x + 1.0f; z1 = z0; }
     else { x0 = (float)x + 1.0f; z0 = (float)z; x1 = (float)x; z1 = z0; }
-    drawWaterFace(x0, z0, x1, z1, y0, y1, (float)dx, (float)dz, kind, 1.0f, 0.0f, waveLo, waveHi);
+    drawWaterFace(x0, z0, x1, z1, y0, y1, (float)dx, (float)dz, kind, 1.0f, 0.0f, waveLo, waveHi, yDelta, t0, dur);
 }
 
 static int waterDepthAt(int x, int z) {
@@ -430,11 +431,13 @@ static float seaWaveAt(int x, int z) {
     return 1.0f;
 }
 
-static void emitExposedSides(int x, int z, int dx, int dz, float y0, float y1, float kind, float seaHere) {
+static void emitExposedSides(int x, int z, int dx, int dz, float y0, float y1, float kind, float seaHere, float yDelta = 0.0f, float t0 = 0.0f, float dur = 0.05f) {
     if (y1 <= y0 + 0.08f) return;
     int nx = x + dx, nz = z + dz;
-    bool hasN = waterHasSurface(nx, nz);
-    float nh = hasN ? waterSurfaceY(nx, nz) : 0.0f;
+    float nf = 0.0f, nt = 0.0f, ns = 0.0f, nd = 0.05f;
+    bool hasN = waterVisualAt(nx, nz, nf, nt, ns, nd);
+    float nh = hasN ? nt : 0.0f;
+    if (kind < 0.5f && hasN && nh > y1 - 0.72f) return;
     int a = (int)std::floor(y0);
     int b = (int)std::floor(y1 - 0.001f);
     if (a < 0) a = 0;
@@ -448,7 +451,8 @@ static void emitExposedSides(int x, int z, int dx, int dz, float y0, float y1, f
         float waveLo = 0.0f;
         if (waveHi > 0.05f && hasN && lo < nh + 0.12f && lo > nh - 0.12f)
             waveLo = seaWaveAt(nx, nz);
-        waterSideQuad(x, z, dx, dz, lo, hi, kind, waveLo, waveHi);
+        float lip = (hi > y1 - 0.08f) ? yDelta : 0.0f;
+        waterSideQuad(x, z, dx, dz, lo, hi, kind, waveLo, waveHi, lip, t0, dur);
         run0 = -1.0f;
     };
     for (int y = a; y <= b; ++y) {
@@ -484,7 +488,7 @@ static float columnLanding(int x, int z, float fromY) {
     return (float)(limit + 1);
 }
 
-static void emitWaterVolume(int x, int z, float h, float seaHere) {
+static void emitWaterVolume(int x, int z, float h, float seaHere, float yDelta = 0.0f, float t0 = 0.0f, float dur = 0.05f) {
     float bot = waterBodyBottom(x, z, h);
     if (h < bot + 0.04f) return;
     const int dir[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
@@ -501,19 +505,19 @@ static void emitWaterVolume(int x, int z, float h, float seaHere) {
         float land = columnLanding(x, z, bot);
         if (bot - land > 0.75f) {
             for (int d = 0; d < 4; ++d)
-                emitExposedSides(x, z, dir[d][0], dir[d][1], land, bot, 1.0f, 0.0f);
+                emitExposedSides(x, z, dir[d][0], dir[d][1], land, bot, 1.0f, 0.0f, 0.0f, t0, dur);
         }
     }
     for (int d = 0; d < 4; ++d) {
         int nx = x + dir[d][0], nz = z + dir[d][1];
-        emitExposedSides(x, z, dir[d][0], dir[d][1], bot, h, 0.0f, seaHere);
+        emitExposedSides(x, z, dir[d][0], dir[d][1], bot, h, 0.0f, seaHere, yDelta, t0, dur);
         if (openBelow) continue;
         int probe = (int)std::floor(bot - 0.02f);
         if (probe < 0 || probe >= HEIGHT) continue;
         if (solid(nx, probe, nz) || blockAt(nx, probe, nz) == Block::Water) continue;
         float land = columnLanding(nx, nz, bot);
         if (bot - land > 0.75f)
-            emitExposedSides(x, z, dir[d][0], dir[d][1], land, bot, 1.0f, 0.0f);
+            emitExposedSides(x, z, dir[d][0], dir[d][1], land, bot, 1.0f, 0.0f, 0.0f, t0, dur);
     }
 }
 
@@ -736,29 +740,71 @@ static void buildChunk(int cx, int cz) {
         }
     gCap = nullptr;
     gCapWater = &chunk.water;
-    auto colH = [](int x, int z) {
-        if (!waterHasSurface(x, z)) return 0.0f;
-        float h = waterSurfaceY(x, z);
-        if (h < 0.02f) return 0.0f;
-        if (solid(x, (int)std::floor(h), z)) return 0.0f;
-        return h;
-    };
     for (int z = z0; z <= z1; ++z)
         for (int x = x0; x <= x1; ++x) {
-            float y00 = colH(x, z);
-            if (y00 < 0.02f) continue;
+            float fromH = 0.0f, toH = 0.0f, t0 = 0.0f, dur = 0.05f;
+            if (!waterVisualAt(x, z, fromH, toH, t0, dur)) continue;
+            if (toH < 0.02f && fromH < 0.02f) continue;
             float foam = 0.0f;
             if (!waterHasSurface(x - 1, z) || !waterHasSurface(x + 1, z)
                 || !waterHasSurface(x, z - 1) || !waterHasSurface(x, z + 1))
                 foam = 1.0f;
-            float fx0 = (float)x, fz0 = (float)z, fx1 = fx0 + 1.0f, fz1 = fz0 + 1.0f;
-            float h = y00;
+            float fx = 0.0f, fz = 0.0f, down = 0.0f;
+            sampleFlowXZ(x, z, fx, fz, down);
+            float spd = std::sqrt(fx * fx + fz * fz);
+            float kind = down > 0.5f ? 1.0f : 0.0f;
+            auto field = [&](float px, float pz, float& oFrom, float& oTo, float& oT, float& oDur) {
+                int ix = (int)std::floor(px);
+                int iz = (int)std::floor(pz);
+                float accF = 0.0f, accT = 0.0f, w = 0.0f;
+                float latest = t0;
+                float latestDur = dur;
+                for (int dz = -1; dz <= 1; ++dz)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        float f, t, st, d;
+                        if (!waterVisualAt(ix + dx, iz + dz, f, t, st, d)) continue;
+                        if (std::fabs(t - toH) > 0.75f && std::fabs(f - toH) > 0.75f) continue;
+                        float dxs = px - ((float)(ix + dx) + 0.5f);
+                        float dzs = pz - ((float)(iz + dz) + 0.5f);
+                        float wt = std::exp(-(dxs * dxs + dzs * dzs) * 1.7f);
+                        accF += f * wt;
+                        accT += t * wt;
+                        w += wt;
+                        if (st >= latest) { latest = st; latestDur = d; }
+                    }
+                if (w < 0.001f) { oFrom = fromH; oTo = toH; oT = t0; oDur = dur; return; }
+                oFrom = accF / w;
+                oTo = accT / w;
+                oT = latest;
+                oDur = latestDur;
+            };
             float wave = seaWaveAt(x, z);
-            pushWater(glm::vec3(fx0, h, fz0), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0, wave);
-            pushWater(glm::vec3(fx0, h, fz1), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0, wave);
-            pushWater(glm::vec3(fx1, h, fz1), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0, wave);
-            pushWater(glm::vec3(fx1, h, fz0), glm::vec3(0, 1, 0), 0, 0, 0, foam, 0, 0, wave);
-            emitWaterVolume(x, z, h, wave);
+            float strength = spd > 0.2f ? spd : foam;
+            const int kSub = 4;
+            for (int j = 0; j < kSub; ++j) {
+                for (int i = 0; i < kSub; ++i) {
+                    auto pt = [&](int ii, int jj, float& oDelta, float& oT, float& oDur) {
+                        float u = (float)ii / (float)kSub;
+                        float v = (float)jj / (float)kSub;
+                        float f, t, st, d;
+                        field((float)x + u, (float)z + v, f, t, st, d);
+                        oDelta = f - t;
+                        oT = st;
+                        oDur = d;
+                        return glm::vec3((float)x + u, t, (float)z + v);
+                    };
+                    float d00, t00, u00, d10, t10, u10, d11, t11, u11, d01, t01, u01;
+                    glm::vec3 p00 = pt(i, j, d00, t00, u00);
+                    glm::vec3 p01 = pt(i, j + 1, d01, t01, u01);
+                    glm::vec3 p11 = pt(i + 1, j + 1, d11, t11, u11);
+                    glm::vec3 p10 = pt(i + 1, j, d10, t10, u10);
+                    pushWater(p00, glm::vec3(0, 1, 0), fx, fz, kind, strength, 0, 0, wave, d00, t00, u00);
+                    pushWater(p01, glm::vec3(0, 1, 0), fx, fz, kind, strength, 0, 0, wave, d01, t01, u01);
+                    pushWater(p11, glm::vec3(0, 1, 0), fx, fz, kind, strength, 0, 0, wave, d11, t11, u11);
+                    pushWater(p10, glm::vec3(0, 1, 0), fx, fz, kind, strength, 0, 0, wave, d10, t10, u10);
+                }
+            }
+            emitWaterVolume(x, z, toH, wave, fromH - toH, t0, dur);
         }
     gCapWater = nullptr;
     auto uploadList = [](std::vector<MeshBatch>& list) {
