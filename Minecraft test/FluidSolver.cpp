@@ -20,7 +20,10 @@ static unsigned gRng = 1u;
 static float gClock = 0.0f;
 static float rnd();
 
-struct Impulse { float x, z, birth, amp; };
+struct Impulse {
+    float x, z, birth, amp;
+    float speed, radius, life, freq;
+};
 static Impulse gRings[8];
 static int gRingCursor = 0;
 
@@ -32,13 +35,22 @@ static float gTrailX = 0.0f;
 static float gTrailZ = 0.0f;
 static bool gTrailHas = false;
 
-static void pushRing(float x, float z, float when, float amp) {
-    if (amp < 0.02f) return;
-    if (amp > 0.22f) amp = 0.22f;
-    gRings[gRingCursor].x = x;
-    gRings[gRingCursor].z = z;
-    gRings[gRingCursor].birth = when;
-    gRings[gRingCursor].amp = amp;
+static void pushRing(float x, float z, float when, float amp, float speed, float radius, float life, float freq) {
+    if (amp < 0.012f) return;
+    if (amp > 0.32f) amp = 0.32f;
+    if (radius < 1.15f) radius = 1.15f;
+    if (radius > 11.5f) radius = 11.5f;
+    if (life < 0.45f) life = 0.45f;
+    if (life > 3.6f) life = 3.6f;
+    Impulse& ring = gRings[gRingCursor];
+    ring.x = x;
+    ring.z = z;
+    ring.birth = when;
+    ring.amp = amp;
+    ring.speed = speed;
+    ring.radius = radius;
+    ring.life = life;
+    ring.freq = freq;
     gRingCursor = (gRingCursor + 1) % 8;
 }
 
@@ -144,16 +156,19 @@ static float gRipClock = 0.0f;
 static float gMaskClock = 1.0f;
 static float gRipEnergy = 0.0f;
 static bool gRipDirty = true;
+static bool gMaskReady = false;
 
 static void rippleDisturb(float wx, float wz, float radius, float amount) {
     float cx = wx - gHOriginX;
     float cz = wz - gHOriginZ;
     float r = radius * (float)RS;
+    if (r < 0.35f) r = 0.35f;
     int x0 = (int)std::floor(cx - r), x1 = (int)std::ceil(cx + r);
     int z0 = (int)std::floor(cz - r), z1 = (int)std::ceil(cz + r);
     for (int z = z0; z <= z1; ++z)
         for (int x = x0; x <= x1; ++x) {
             if (x < 1 || z < 1 || x >= RN - 1 || z >= RN - 1) continue;
+            if (gMaskReady && !gRipMask[z * RN + x]) continue;
             float dx = (x + 0.5f - cx) / r, dz = (z + 0.5f - cz) / r;
             float d2 = dx * dx + dz * dz;
             if (d2 > 1.0f) continue;
@@ -172,10 +187,58 @@ static void rebuildMask() {
             if (waterHasSurface(wx, wz))
                 gRipMask[z * RN + x] = 1;
         }
+    gMaskReady = true;
+}
+
+static void shiftField(const std::vector<float>& src, std::vector<float>& dst, int dx, int dz) {
+    std::fill(dst.begin(), dst.end(), 0.0f);
+    for (int z = 0; z < RN; ++z) {
+        int oz = z + dz;
+        if (oz < 0 || oz >= RN) continue;
+        for (int x = 0; x < RN; ++x) {
+            int ox = x + dx;
+            if (ox < 0 || ox >= RN) continue;
+            dst[z * RN + x] = src[oz * RN + ox];
+        }
+    }
+}
+
+static float localGain(float wx, float wz) {
+    float best = 0.0f;
+    for (int i = 0; i < 8; ++i) {
+        const Impulse& ring = gRings[i];
+        if (ring.amp < 0.001f) continue;
+        float age = gClock - ring.birth;
+        if (age < -0.05f || age > ring.life) continue;
+        float dx = wx - ring.x;
+        float dz = wz - ring.z;
+        float dist = std::sqrt(dx * dx + dz * dz);
+        if (dist >= ring.radius) continue;
+        float edge = ring.radius * 0.68f;
+        float fade = 1.0f;
+        if (dist > edge) {
+            float u = (dist - edge) / (ring.radius - edge + 0.001f);
+            if (u > 1.0f) u = 1.0f;
+            fade = 1.0f - u * u * (3.0f - 2.0f * u);
+        }
+        if (fade > best) best = fade;
+    }
+    for (int i = 0; i < gTrailCount; ++i) {
+        const Trail& trail = gTrail[i];
+        float age = gClock - trail.birth;
+        if (age < 0.0f || age > 2.0f) continue;
+        float dx = wx - trail.x;
+        float dz = wz - trail.z;
+        float dist = std::sqrt(dx * dx + dz * dz);
+        if (dist > 3.2f) continue;
+        float u = dist / 3.2f;
+        float fade = (1.0f - u * u) * (1.0f - age / 2.0f);
+        if (fade > best) best = fade;
+    }
+    return best;
 }
 
 static void rippleStep() {
-    const float damp = 0.985f;
     for (int z = 1; z < RN - 1; ++z)
         for (int x = 1; x < RN - 1; ++x) {
             int i = z * RN + x;
@@ -183,8 +246,17 @@ static void rippleStep() {
                 gRipPrev[i] = 0.0f;
                 continue;
             }
-            float sum = gRipCur[i - 1] + gRipCur[i + 1] + gRipCur[i - RN] + gRipCur[i + RN];
-            gRipPrev[i] = (sum * 0.5f - gRipPrev[i]) * damp;
+            float gain = localGain(gHOriginX + (float)x + 0.5f, gHOriginZ + (float)z + 0.5f);
+            if (gain <= 0.001f) {
+                gRipPrev[i] = gRipCur[i] * 0.62f;
+                continue;
+            }
+            float west = gRipMask[i - 1] ? gRipCur[i - 1] : 0.0f;
+            float east = gRipMask[i + 1] ? gRipCur[i + 1] : 0.0f;
+            float south = gRipMask[i - RN] ? gRipCur[i - RN] : 0.0f;
+            float north = gRipMask[i + RN] ? gRipCur[i + RN] : 0.0f;
+            float damp = 0.955f + gain * 0.028f;
+            gRipPrev[i] = ((west + east + south + north) * 0.5f - gRipPrev[i]) * damp * (0.42f + 0.58f * gain);
         }
     gRipCur.swap(gRipPrev);
 }
@@ -212,8 +284,30 @@ void fluidBindRipple(int unit) {
 }
 
 void fluidSetView(float x, float z) {
-    gHOriginX = std::floor(x - (float)RN * 0.5f);
-    gHOriginZ = std::floor(z - (float)RN * 0.5f);
+    float nx = std::floor(x - (float)RN * 0.5f);
+    float nz = std::floor(z - (float)RN * 0.5f);
+    int dx = (int)(nx - gHOriginX);
+    int dz = (int)(nz - gHOriginZ);
+    if (dx != 0 || dz != 0) {
+        if (dx > -RN && dx < RN && dz > -RN && dz < RN && (gRipEnergy > 0.0f)) {
+            static std::vector<float> shiftA(RN * RN, 0.0f);
+            static std::vector<float> shiftB(RN * RN, 0.0f);
+            shiftField(gRipCur, shiftA, dx, dz);
+            shiftField(gRipPrev, shiftB, dx, dz);
+            gRipCur.swap(shiftA);
+            gRipPrev.swap(shiftB);
+            gRipDirty = true;
+        }
+        else if (dx <= -RN || dx >= RN || dz <= -RN || dz >= RN) {
+            std::fill(gRipCur.begin(), gRipCur.end(), 0.0f);
+            std::fill(gRipPrev.begin(), gRipPrev.end(), 0.0f);
+            gRipDirty = true;
+            gRipEnergy = 0.0f;
+        }
+        gMaskClock = 1.0f;
+    }
+    gHOriginX = nx;
+    gHOriginZ = nz;
 }
 
 void fluidHeightOrigin(float& x, float& z) {
@@ -458,26 +552,33 @@ void fluidWake(float x, float z, float vx, float vz) {
 
 void fluidImpact(float x, float y, float z, float speed, float mass) {
     if (speed < 0.0f) speed = -speed;
-    if (speed < 1.2f || mass <= 0.0f) return;
-    float energy = 0.5f * mass * speed * speed;
-    float sink = std::sqrt(energy) * 0.008f;
-    if (sink > 1.0f) sink = 1.0f;
-    float radius = 0.28f + std::sqrt(mass) * 0.04f;
-    if (radius > 0.85f) radius = 0.85f;
-    rippleDisturb(x, z, radius, sink);
-    float amp = 0.07f + speed * 0.008f;
-    if (amp > 0.18f) amp = 0.18f;
-    pushRing(x, z, gClock, amp);
-    for (int i = 0; i < 3; ++i) {
-        float ang = rnd() * 6.2831853f;
-        float rad = 0.25f + rnd() * 0.7f;
-        pushRing(x + std::cos(ang) * rad, z + std::sin(ang) * rad, gClock + 0.06f + rnd() * 0.12f, amp * 0.42f);
-    }
+    if (speed < 3.1f || mass <= 0.0f) return;
+    float weight = mass / 82.0f;
+    if (weight < 0.35f) weight = 0.35f;
+    if (weight > 2.2f) weight = 2.2f;
+    float t = (speed - 3.1f) / 27.0f;
+    if (t > 1.0f) t = 1.0f;
+    float force = t * t * (3.0f - 2.0f * t);
+    force *= std::sqrt(weight);
+    if (force > 1.15f) force = 1.15f;
+    float vary = 0.92f + rnd() * 0.16f;
 
-    int count = (int)(energy / 160.0f);
-    if (count < 6) count = 6;
-    if (count > 56) count = 56;
-    float kick = speed * 0.42f;
+    float amp = (0.04f + force * 0.23f) * vary;
+    float reach = 1.55f + force * 8.4f;
+    float waveSpeed = 1.65f + force * 2.5f;
+    float life = reach / waveSpeed + 0.42f;
+    float freq = (8.6f - force * 3.3f) * (0.94f + rnd() * 0.12f);
+    life *= 0.94f + rnd() * 0.1f;
+
+    if (!gMaskReady) rebuildMask();
+    rippleDisturb(x, z, 0.28f + force * 0.95f, 0.03f + force * 0.16f);
+    pushRing(x, z, gClock, amp, waveSpeed, reach, life, freq);
+    if (force > 0.58f)
+        pushRing(x, z, gClock + 0.15f, amp * 0.4f, waveSpeed * 0.84f, reach * 0.68f, life * 0.78f, freq * 1.18f);
+
+    int count = (int)(2.0f + force * 34.0f);
+    if (count > 40) count = 40;
+    float kick = 1.2f + force * 7.2f;
     if (kick > 9.0f) kick = 9.0f;
 
     float gx, gy, gz;
@@ -485,21 +586,24 @@ void fluidImpact(float x, float y, float z, float speed, float mass) {
 
     for (int i = 0; i < count; ++i) {
         float ang = rnd() * 6.2831853f;
-        float rad = 0.12f + rnd() * 0.55f;
-        float up = 0.40f + rnd() * 0.95f;
+        float rad = (0.08f + force * 0.62f) * (0.35f + rnd());
+        float up = 0.35f + rnd() * (0.45f + force * 0.7f);
         float px = x + std::cos(ang) * rad * 0.28f;
         float pz = z + std::sin(ang) * rad * 0.28f;
         float py = y + rnd() * 0.10f;
         float svx = std::cos(ang) * kick * (0.35f + rnd() * 0.70f) + gx * 0.45f;
         float svz = std::sin(ang) * kick * (0.35f + rnd() * 0.70f) + gz * 0.45f;
         float svy = up * kick * 0.90f + gy * 0.5f;
-        float size = 0.032f + rnd() * 0.05f + speed * 0.0014f;
+        float size = 0.02f + rnd() * 0.028f + force * 0.055f;
         if (size > 0.13f) size = 0.13f;
         pushDrop(px, py, pz, svx, svy, svz, size, 0.50f + rnd() * 0.75f);
     }
 
-    int crown = 6 + count / 8;
-    if (crown > 14) crown = 14;
+    int crown = 0;
+    if (force > 0.38f) {
+        crown = (int)(3.0f + force * 8.0f);
+        if (crown > 12) crown = 12;
+    }
     for (int i = 0; i < crown; ++i) {
         float ang = (float)i * (6.2831853f / (float)crown) + rnd() * 0.2f;
         float svx = std::cos(ang) * kick * 0.85f;
@@ -615,13 +719,18 @@ void fluidDraw() {
 
 void fluidBindMotion(unsigned program) {
     float rings[8 * 4] = {};
+    float extra[8 * 4] = {};
     for (int i = 0; i < 8; ++i) {
         float age = gClock - gRings[i].birth;
-        bool live = gRings[i].amp > 0.001f && age > -0.2f && age < 5.0f;
+        bool live = gRings[i].amp > 0.001f && age > -0.2f && age < gRings[i].life;
         rings[i * 4 + 0] = gRings[i].x;
         rings[i * 4 + 1] = gRings[i].z;
         rings[i * 4 + 2] = gRings[i].birth;
         rings[i * 4 + 3] = live ? gRings[i].amp : 0.0f;
+        extra[i * 4 + 0] = gRings[i].speed;
+        extra[i * 4 + 1] = gRings[i].radius;
+        extra[i * 4 + 2] = gRings[i].life;
+        extra[i * 4 + 3] = gRings[i].freq;
     }
     float wake[16 * 4] = {};
     float dir[16 * 4] = {};
@@ -640,9 +749,11 @@ void fluidBindMotion(unsigned program) {
     }
     auto loc = [&](const char* name) { return glx.GetUniformLocation(program, name); };
     int r = loc("uRings");
+    int ex = loc("uRingEx");
     int w = loc("uWake");
     int d = loc("uWakeDir");
     if (r >= 0) glx.Uniform4fv(r, 8, rings);
+    if (ex >= 0) glx.Uniform4fv(ex, 8, extra);
     if (w >= 0) glx.Uniform4fv(w, 16, wake);
     if (d >= 0) glx.Uniform4fv(d, 16, dir);
 }

@@ -159,6 +159,58 @@ out float vLip;
 out float vLift;
 out float vOpen;
 uniform float uTime;
+uniform vec4 uRings[8];
+uniform vec4 uRingEx[8];
+uniform vec2 uHeightOrigin;
+uniform float uWorld;
+uniform sampler2D uHeight;
+
+float ringHeight(vec2 p) {
+    float h = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        float amp = uRings[i].w;
+        if (amp < 0.001) continue;
+        float t = uTime - uRings[i].z;
+        float life = uRingEx[i].z;
+        if (t < 0.0 || t > life) continue;
+        vec2 center = uRings[i].xy;
+        vec2 d = p - center;
+        float dist = length(d);
+        float radius = uRingEx[i].y;
+        if (dist > radius) continue;
+        vec2 a = floor(center);
+        vec2 b = floor(p);
+        vec2 delta = b - a;
+        float steps = max(abs(delta.x), abs(delta.y));
+        if (steps < 1.0) steps = 1.0;
+        float nStep = min(steps, 12.0);
+        bool open = true;
+        for (int s = 1; s <= 12; ++s) {
+            if (float(s) > nStep) break;
+            vec2 cell = floor(a + delta * (float(s) / nStep)) + vec2(0.5);
+            vec2 uv = (cell - uHeightOrigin) / max(uWorld, 1.0);
+            if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0 || texture(uHeight, uv).g < 0.5) {
+                open = false;
+                break;
+            }
+        }
+        if (!open) continue;
+        float speed = uRingEx[i].x;
+        float freq = uRingEx[i].w;
+        float behind = t * speed - dist;
+        float packet = 0.7 + amp * 5.4;
+        float edge = 1.0 - smoothstep(radius * 0.62, radius, dist);
+        float atten = exp(-dist * (1.2 / max(radius, 0.75))) * edge;
+        float fade = exp(-t * (1.65 / max(life, 0.25)));
+        if (behind > -0.3 && behind < packet) {
+            float env = exp(-abs(behind) * (1.2 - amp * 2.0)) * fade * atten;
+            h += sin(behind * freq) * env * amp;
+        }
+        float k = 3.2 - amp * 6.2;
+        h -= exp(-dist * dist * k) * exp(-t * (2.3 + amp * 2.2)) * amp;
+    }
+    return h;
+}
 
 void swell(inout vec3 p, inout vec3 n, vec2 dir, float amp, float len) {
     float k = 6.2831853 / len;
@@ -215,6 +267,8 @@ void main() {
         if (gl_Normal.y > 0.45) vWaveN = normalize(n);
         vLift = p.y - baseY;
     }
+    if (gl_Normal.y > 0.45)
+        p.y += ringHeight(p.xz);
     vWorld = p;
     gl_Position = gl_ModelViewProjectionMatrix * vec4(p, 1.0);
 }
@@ -247,24 +301,60 @@ uniform mat4 uShadowMat;
 uniform float uWorld;
 uniform vec2 uHeightOrigin;
 uniform vec4 uRings[8];
+uniform vec4 uRingEx[8];
 uniform vec4 uWake[16];
 uniform vec4 uWakeDir[16];
 
-float ringsH(vec2 p, inout float crest) {
+float ringField(vec2 p, out vec2 grad) {
     float h = 0.0;
+    grad = vec2(0.0);
     for (int i = 0; i < 8; ++i) {
         float amp = uRings[i].w;
         if (amp < 0.001) continue;
         float t = uTime - uRings[i].z;
-        if (t < 0.0 || t > 4.6) continue;
-        float dist = length(p - uRings[i].xy);
-        float behind = t * 5.4 - dist;
-        if (behind < 0.0 || behind > 8.0) continue;
-        float env = exp(-behind * 0.26) * exp(-t * 0.30) * smoothstep(0.0, 0.2, behind);
-        float s = sin(behind * 6.6);
-        h += s * env * amp;
-        h -= exp(-dist * dist * 2.4) * exp(-t * 1.7) * amp;
-        crest += smoothstep(0.45, 1.0, s) * env * amp * 5.0;
+        float life = uRingEx[i].z;
+        if (t < 0.0 || t > life) continue;
+        vec2 center = uRings[i].xy;
+        vec2 d = p - center;
+        float dist = length(d);
+        float radius = uRingEx[i].y;
+        if (dist > radius) continue;
+        vec2 a = floor(center);
+        vec2 b = floor(p);
+        vec2 delta = b - a;
+        float steps = max(abs(delta.x), abs(delta.y));
+        if (steps < 1.0) steps = 1.0;
+        float nStep = min(steps, 12.0);
+        bool open = true;
+        for (int s = 1; s <= 12; ++s) {
+            if (float(s) > nStep) break;
+            vec2 cell = floor(a + delta * (float(s) / nStep)) + vec2(0.5);
+            vec2 uv = (cell - uHeightOrigin) / max(uWorld, 1.0);
+            if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0 || texture(uHeight, uv).g < 0.5) {
+                open = false;
+                break;
+            }
+        }
+        if (!open) continue;
+        vec2 dir = dist > 0.001 ? d / dist : vec2(0.0);
+        float speed = uRingEx[i].x;
+        float freq = uRingEx[i].w;
+        float behind = t * speed - dist;
+        float packet = 0.7 + amp * 5.4;
+        float edge = 1.0 - smoothstep(radius * 0.62, radius, dist);
+        float atten = exp(-dist * (1.2 / max(radius, 0.75))) * edge;
+        float fade = exp(-t * (1.65 / max(life, 0.25)));
+        if (behind > -0.3 && behind < packet) {
+            float env = exp(-abs(behind) * (1.2 - amp * 2.0)) * fade * atten;
+            float s = sin(behind * freq);
+            float co = cos(behind * freq);
+            h += s * env * amp;
+            grad += dir * (-freq * co * env * amp);
+        }
+        float k = 3.2 - amp * 6.2;
+        float dent = exp(-dist * dist * k) * exp(-t * (2.3 + amp * 2.2)) * amp;
+        h -= dent;
+        grad += dir * (2.0 * k * dist * dent);
     }
     return h;
 }
@@ -286,12 +376,6 @@ float wakeH(vec2 p, inout float foam) {
         h += sin(v * 4.6 - age * 6.0) * exp(-v * 0.72) * smoothstep(0.08, 0.9, -al) * fade * 0.035;
     }
     return h;
-}
-
-float motionH(vec2 p) {
-    float c = 0.0;
-    float f = 0.0;
-    return ringsH(p, c) + wakeH(p, f);
 }
 
 float linearDepth(float d) {
@@ -353,6 +437,17 @@ void main() {
     }
 
     float dist = length(vWorld.xz - uCam.xz);
+    if (geo.y > 0.45 && vOpen < 0.92) {
+        float flow = clamp(length(vFlow.xy), 0.0, 1.0);
+        float amp = mix(0.05, 0.082, flow);
+        vec3 p = vWorld;
+        float f1 = p.x * 1.37 + p.z * 0.81 + uTime * 1.05;
+        float f2 = -p.x * 0.53 + p.z * 1.83 - uTime * 0.82;
+        float f3 = p.x * 0.62 + p.z * 0.71 + uTime * 0.55;
+        float dx = cos(f1) * 1.37 * 0.50 + cos(f2) * (-0.53) * 0.32 + cos(f3) * 0.62 * 0.18;
+        float dz = cos(f1) * 0.81 * 0.50 + cos(f2) * 1.83 * 0.32 + cos(f3) * 0.71 * 0.18;
+        waveN = normalize(vec3(-dx * amp, 1.0, -dz * amp));
+    }
     vec2 uvA = (vWorld.xz + vFlow.xy * uTime * 0.55 * clamp(vFlow.w, 0.0, 1.0)) / 16.0;
     float e = 0.035;
     float hL = texture(uFft, uvA - vec2(e, 0.0)).x;
@@ -387,17 +482,33 @@ void main() {
         return;
     }
 
-    float splashCrest = 0.0;
     float wakeFoam = 0.0;
-    if (dist < 78.0) {
-        float e = 0.11;
-        vec2 p = vWorld.xz;
-        ringsH(p, splashCrest);
-        wakeH(p, wakeFoam);
-        float hxM = motionH(p - vec2(e, 0.0)) - motionH(p + vec2(e, 0.0));
-        float hzM = motionH(p - vec2(0.0, e)) - motionH(p + vec2(0.0, e));
-        n = normalize(n + vec3(hxM, 0.0, hzM) * 4.2);
+    float rh = 0.0;
+    vec2 rg = vec2(0.0);
+    vec2 wp = vWorld.xz;
+    bool ringNear = false;
+    for (int i = 0; i < 8; ++i) {
+        if (uRings[i].w < 0.001) continue;
+        if (length(wp - uRings[i].xy) <= uRingEx[i].y) { ringNear = true; break; }
     }
+    if (ringNear) rh = ringField(wp, rg);
+    bool wakeNear = false;
+    for (int i = 0; i < 16; ++i) {
+        if (uWake[i].w < 0.5) continue;
+        float age = uTime - uWake[i].z;
+        if (age < 0.0 || age > 4.2) continue;
+        if (length(wp - uWake[i].xy) < 4.5) { wakeNear = true; break; }
+    }
+    if (wakeNear) {
+        float dummy = 0.0;
+        float e = 0.12;
+        wakeH(wp, wakeFoam);
+        float hxW = wakeH(wp - vec2(e, 0.0), dummy) - wakeH(wp + vec2(e, 0.0), dummy);
+        dummy = 0.0;
+        float hzW = wakeH(wp - vec2(0.0, e), dummy) - wakeH(wp + vec2(0.0, e), dummy);
+        rg += vec2(hxW, hzW) * 2.4;
+    }
+    n = normalize(n + vec3(-rg.x, 0.0, -rg.y));
 
     vec2 uv = gl_FragCoord.xy / vec2(textureSize(uScene, 0));
     vec2 distort = n.xz * (0.012 + 0.01 * detail);
@@ -423,9 +534,9 @@ void main() {
     col = mix(col, vec3(0.86, 0.93, 0.95), crest * 0.45);
 
     float occ = texture(uHeight, ruv).g;
-    float shore = (1.0 - smoothstep(0.15, 0.72, occ)) * shallow;
-    col = mix(col, vec3(0.72, 0.90, 0.92), shore * 0.28);
-    col += vec3(0.90, 0.97, 1.0) * clamp(splashCrest, 0.0, 0.85) * 0.7;
+    float shore = (1.0 - smoothstep(0.22, 0.78, occ)) * shallow;
+    col = mix(col, vec3(0.72, 0.90, 0.92), shore * 0.14);
+    col += vec3(0.90, 0.97, 1.0) * clamp(rh, 0.0, 0.18) * (0.45 + 1.5 * uSunAmt);
     col = mix(col, vec3(0.82, 0.96, 0.98), clamp(wakeFoam * 0.16, 0.0, 0.36));
     float fog = smoothstep(118.0, 168.0, dist);
     col = mix(col, uSky, fog);

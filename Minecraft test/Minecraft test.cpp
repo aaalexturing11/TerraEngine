@@ -3,6 +3,7 @@
 #include <thread>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -42,7 +43,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     }
     glfwMakeContextCurrent(window);
     if (!initGlExtensions() || !initBlockShaders() || !initClouds() || !initPostFX()) {
-        MessageBoxA(nullptr, "No se pudo iniciar OpenGL 3.3 (shaders).", "TerraEngine", MB_OK);
+        char box[1600];
+        std::snprintf(box, sizeof(box), "No se pudo iniciar OpenGL 3.3 (shaders).\n\n%s", lastGlShaderError());
+        MessageBoxA(nullptr, box, "TerraEngine", MB_OK);
         glfwTerminate();
         return -1;
     }

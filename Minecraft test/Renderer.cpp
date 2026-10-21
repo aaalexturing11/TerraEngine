@@ -382,6 +382,37 @@ static bool clipWaterVert(float& x, float& y, float& z) {
     return !blocked(x, y, z);
 }
 
+static void pullShore(glm::vec3& p) {
+    const float e = 0.02f;
+    int iy = (int)std::floor(p.y + 0.05f);
+    if (iy < 0) iy = 0;
+    if (iy >= HEIGHT) iy = HEIGHT - 1;
+    for (int pass = 0; pass < 2; ++pass) {
+        int ix = (int)std::floor(p.x);
+        int iz = (int)std::floor(p.z);
+        if (p.x - (float)ix < e && solid(ix - 1, iy, iz)) p.x = (float)ix + e;
+        if ((float)(ix + 1) - p.x < e && solid(ix + 1, iy, iz)) p.x = (float)(ix + 1) - e;
+        if (p.z - (float)iz < e && solid(ix, iy, iz - 1)) p.z = (float)iz + e;
+        if ((float)(iz + 1) - p.z < e && solid(ix, iy, iz + 1)) p.z = (float)(iz + 1) - e;
+        ix = (int)std::floor(p.x);
+        iz = (int)std::floor(p.z);
+        if (!solid(ix, iy, iz)) break;
+        float lx = p.x - (float)ix;
+        float lz = p.z - (float)iz;
+        if (lx <= lz) {
+            if (lx < 1.0f - lx) p.x = (float)ix - e;
+            else p.x = (float)(ix + 1) + e;
+        }
+        else {
+            if (lz < 1.0f - lz) p.z = (float)iz - e;
+            else p.z = (float)(iz + 1) + e;
+        }
+    }
+    int ix = (int)std::floor(p.x);
+    int iz = (int)std::floor(p.z);
+    if (solid(ix, iy + 1, iz) && p.y > (float)iy + 0.96f) p.y = (float)iy + 0.96f;
+}
+
 static bool waterPoint(float x, float z) {
     int ix = (int)std::floor(x);
     int iz = (int)std::floor(z);
@@ -398,13 +429,19 @@ static float waterBodyBottom(int x, int z, float topH) {
 }
 
 static void waterSideQuad(int x, int z, int dx, int dz, float y0, float y1, float kind, float waveLo, float waveHi, float yDelta = 0.0f, float t0 = 0.0f, float dur = 0.05f) {
-    if (y1 <= y0 + 0.08f) return;
+    const float tuck = 0.045f;
+    y1 -= tuck;
+    y0 += 0.015f;
+    if (y1 <= y0 + 0.06f) return;
+    const float inset = 0.02f;
+    float ox = -(float)dx * inset;
+    float oz = -(float)dz * inset;
     float x0, z0, x1, z1;
     if (dx == 1) { x0 = (float)x + 1.0f; z0 = (float)z + 1.0f; x1 = x0; z1 = (float)z; }
     else if (dx == -1) { x0 = (float)x; z0 = (float)z; x1 = x0; z1 = (float)z + 1.0f; }
     else if (dz == 1) { x0 = (float)x; z0 = (float)z + 1.0f; x1 = (float)x + 1.0f; z1 = z0; }
     else { x0 = (float)x + 1.0f; z0 = (float)z; x1 = (float)x; z1 = z0; }
-    drawWaterFace(x0, z0, x1, z1, y0, y1, (float)dx, (float)dz, kind, 1.0f, 0.0f, waveLo, waveHi, yDelta, t0, dur);
+    drawWaterFace(x0 + ox, z0 + oz, x1 + ox, z1 + oz, y0, y1, (float)dx, (float)dz, kind, 1.0f, 0.0f, waveLo, waveHi, yDelta, t0, dur);
 }
 
 static int waterDepthAt(int x, int z) {
@@ -437,7 +474,7 @@ static void emitExposedSides(int x, int z, int dx, int dz, float y0, float y1, f
     float nf = 0.0f, nt = 0.0f, ns = 0.0f, nd = 0.05f;
     bool hasN = waterVisualAt(nx, nz, nf, nt, ns, nd);
     float nh = hasN ? nt : 0.0f;
-    if (kind < 0.5f && hasN && nh > y1 - 0.72f) return;
+    if (kind < 0.5f && hasN && nh > y1 - 1.75f) return;
     int a = (int)std::floor(y0);
     int b = (int)std::floor(y1 - 0.001f);
     if (a < 0) a = 0;
@@ -745,10 +782,6 @@ static void buildChunk(int cx, int cz) {
             float fromH = 0.0f, toH = 0.0f, t0 = 0.0f, dur = 0.05f;
             if (!waterVisualAt(x, z, fromH, toH, t0, dur)) continue;
             if (toH < 0.02f && fromH < 0.02f) continue;
-            float foam = 0.0f;
-            if (!waterHasSurface(x - 1, z) || !waterHasSurface(x + 1, z)
-                || !waterHasSurface(x, z - 1) || !waterHasSurface(x, z + 1))
-                foam = 1.0f;
             float fx = 0.0f, fz = 0.0f, down = 0.0f;
             sampleFlowXZ(x, z, fx, fz, down);
             float spd = std::sqrt(fx * fx + fz * fz);
@@ -756,17 +789,20 @@ static void buildChunk(int cx, int cz) {
             auto field = [&](float px, float pz, float& oFrom, float& oTo, float& oT, float& oDur) {
                 int ix = (int)std::floor(px);
                 int iz = (int)std::floor(pz);
+                float anchor = toH;
+                float af, at, ast, ad;
+                if (waterVisualAt(ix, iz, af, at, ast, ad)) anchor = at;
                 float accF = 0.0f, accT = 0.0f, w = 0.0f;
                 float latest = t0;
                 float latestDur = dur;
-                for (int dz = -1; dz <= 1; ++dz)
-                    for (int dx = -1; dx <= 1; ++dx) {
+                for (int dz = -2; dz <= 2; ++dz)
+                    for (int dx = -2; dx <= 2; ++dx) {
                         float f, t, st, d;
                         if (!waterVisualAt(ix + dx, iz + dz, f, t, st, d)) continue;
-                        if (std::fabs(t - toH) > 0.75f && std::fabs(f - toH) > 0.75f) continue;
+                        if (std::fabs(t - anchor) > 1.75f && std::fabs(f - anchor) > 1.75f) continue;
                         float dxs = px - ((float)(ix + dx) + 0.5f);
                         float dzs = pz - ((float)(iz + dz) + 0.5f);
-                        float wt = std::exp(-(dxs * dxs + dzs * dzs) * 1.7f);
+                        float wt = std::exp(-(dxs * dxs + dzs * dzs) * 0.36f);
                         accF += f * wt;
                         accT += t * wt;
                         w += wt;
@@ -779,8 +815,8 @@ static void buildChunk(int cx, int cz) {
                 oDur = latestDur;
             };
             float wave = seaWaveAt(x, z);
-            float strength = spd > 0.2f ? spd : foam;
-            const int kSub = 4;
+            float strength = spd;
+            const int kSub = 6;
             for (int j = 0; j < kSub; ++j) {
                 for (int i = 0; i < kSub; ++i) {
                     auto pt = [&](int ii, int jj, float& oDelta, float& oT, float& oDur) {
@@ -798,6 +834,10 @@ static void buildChunk(int cx, int cz) {
                     glm::vec3 p01 = pt(i, j + 1, d01, t01, u01);
                     glm::vec3 p11 = pt(i + 1, j + 1, d11, t11, u11);
                     glm::vec3 p10 = pt(i + 1, j, d10, t10, u10);
+                    pullShore(p00);
+                    pullShore(p01);
+                    pullShore(p11);
+                    pullShore(p10);
                     pushWater(p00, glm::vec3(0, 1, 0), fx, fz, kind, strength, 0, 0, wave, d00, t00, u00);
                     pushWater(p01, glm::vec3(0, 1, 0), fx, fz, kind, strength, 0, 0, wave, d01, t01, u01);
                     pushWater(p11, glm::vec3(0, 1, 0), fx, fz, kind, strength, 0, 0, wave, d11, t11, u11);
@@ -896,20 +936,42 @@ static void updateWorldMeshes() {
 static bool chunkVisible(int cx, int cz, int radius) {
     glm::vec3 cam = cameraPosition();
     glm::vec3 look = cameraLookDirection();
+    float llen = std::sqrt(look.x * look.x + look.y * look.y + look.z * look.z);
+    if (llen > 0.001f) { look.x /= llen; look.y /= llen; look.z /= llen; }
     float minX = (float)(cx * kChunk);
-    float maxX = minX + kChunk;
+    float maxX = minX + (float)kChunk;
     float minZ = (float)(cz * kChunk);
-    float maxZ = minZ + kChunk;
-    float dx = std::max(minX - cam.x, std::max(0.0f, cam.x - maxX));
-    float dz = std::max(minZ - cam.z, std::max(0.0f, cam.z - maxZ));
-    if (dx * dx + dz * dz > (float)(radius + kChunk) * (radius + kChunk)) return false;
-    float mx = (minX + maxX) * 0.5f - cam.x;
-    float mz = (minZ + maxZ) * 0.5f - cam.z;
-    if (mx * mx + mz * mz < (float)(kChunk * kChunk)) return true;
-    float fl = std::sqrt(look.x * look.x + look.z * look.z);
-    if (fl < 0.001f) return true;
-    float dot = (look.x * mx + look.z * mz) / (fl * std::sqrt(mx * mx + mz * mz));
-    return dot > -0.2f;
+    float maxZ = minZ + (float)kChunk;
+    float dx = 0.0f, dz = 0.0f;
+    if (cam.x < minX) dx = minX - cam.x;
+    else if (cam.x > maxX) dx = cam.x - maxX;
+    if (cam.z < minZ) dz = minZ - cam.z;
+    else if (cam.z > maxZ) dz = cam.z - maxZ;
+    float reach = (float)(radius + kChunk);
+    if (dx * dx + dz * dz > reach * reach) return false;
+    if (dx == 0.0f && dz == 0.0f) return true;
+
+    float px = cam.x;
+    if (px < minX) px = minX;
+    else if (px > maxX) px = maxX;
+    float pz = cam.z;
+    if (pz < minZ) pz = minZ;
+    else if (pz > maxZ) pz = maxZ;
+    float samples[3] = { cam.y, cam.y - 80.0f, cam.y + 40.0f };
+    float best = -2.0f;
+    for (int i = 0; i < 3; ++i) {
+        float py = samples[i];
+        if (py < 0.0f) py = 0.0f;
+        if (py > (float)HEIGHT) py = (float)HEIGHT;
+        float vx = px - cam.x;
+        float vy = py - cam.y;
+        float vz = pz - cam.z;
+        float len = std::sqrt(vx * vx + vy * vy + vz * vz);
+        if (len < 0.001f) return true;
+        float d = (look.x * vx + look.y * vy + look.z * vz) / len;
+        if (d > best) best = d;
+    }
+    return best > -0.28f;
 }
 
 static void drawBatches(const std::vector<MeshBatch>& batches, bool animateTorch) {
@@ -1020,13 +1082,17 @@ void renderOpaqueBlocks(int renderRadiusXZ, int) {
 
 void renderWaterBlocks(int renderRadiusXZ, int) {
     ensureMeshes();
+    glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
     glDepthMask(GL_TRUE);
     gCapWater = nullptr;
     for (auto it = gMeshes.begin(); it != gMeshes.end(); ++it)
         if (chunkVisible(it->second.cx, it->second.cz, renderRadiusXZ))
             drawWaterMesh(it->second.water);
     fluidDraw();
+    glDepthFunc(GL_LESS);
     glDisable(GL_BLEND);
 }

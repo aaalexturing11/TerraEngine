@@ -1329,7 +1329,6 @@ void worldFixSpawn(int& x, int& y, int& z) {
 }
 
 static void rememberWater(int x, int y, int z);
-static void enqueueAround(int x, int y, int z);
 
 static char gSaveId[64] = "";
 static const int kVolN = CHUNK * CHUNK * HEIGHT;
@@ -1540,14 +1539,26 @@ static void enqueueWater(int x, int y, int z) {
     gFlowQ.push_back({ x, y, z });
 }
 
-static void enqueueAround(int x, int y, int z) {
-    enqueueWater(x, y, z);
-    enqueueWater(x + 1, y, z);
-    enqueueWater(x - 1, y, z);
-    enqueueWater(x, y + 1, z);
-    enqueueWater(x, y - 1, z);
-    enqueueWater(x, y, z + 1);
-    enqueueWater(x, y, z - 1);
+struct DelayCell { int x, y, z; float wait; };
+static std::vector<DelayCell> gDelay;
+static std::unordered_set<unsigned long long> gDelaySet;
+static const float kFlowStep = 0.16f;
+
+static void scheduleDelay(int x, int y, int z) {
+    if (!inBounds(x, y, z)) return;
+    unsigned long long key = flowKey(x, y, z);
+    if (!gDelaySet.insert(key).second) return;
+    gDelay.push_back({ x, y, z, kFlowStep });
+}
+
+static void scheduleAround(int x, int y, int z) {
+    scheduleDelay(x, y, z);
+    scheduleDelay(x + 1, y, z);
+    scheduleDelay(x - 1, y, z);
+    scheduleDelay(x, y + 1, z);
+    scheduleDelay(x, y - 1, z);
+    scheduleDelay(x, y, z + 1);
+    scheduleDelay(x, y, z - 1);
 }
 
 static bool columnDrops(int x, int y, int z) {
@@ -1632,7 +1643,7 @@ static bool settleWater(int x, int y, int z) {
         paintFlow(x, y, z, want);
         resolveFluidContact(x, y, z);
     }
-    enqueueAround(x, y, z);
+    scheduleAround(x, y, z);
     return true;
 }
 
@@ -1654,6 +1665,28 @@ static void drainWater(bool& changed, int& minX, int& minY, int& minZ, int& maxX
     if (gFlowHead > 512 && gFlowHead * 2 > gFlowQ.size()) {
         gFlowQ.erase(gFlowQ.begin(), gFlowQ.begin() + (std::ptrdiff_t)gFlowHead);
         gFlowHead = 0;
+    }
+}
+
+static void pumpDelays(float dt, bool& changed, int& minX, int& minY, int& minZ, int& maxX, int& maxY, int& maxZ) {
+    int steps = 0;
+    size_t i = 0;
+    while (i < gDelay.size() && steps < 40) {
+        gDelay[i].wait -= dt;
+        if (gDelay[i].wait > 0.0f) { ++i; continue; }
+        DelayCell cell = gDelay[i];
+        gDelay[i] = gDelay.back();
+        gDelay.pop_back();
+        gDelaySet.erase(flowKey(cell.x, cell.y, cell.z));
+        ++steps;
+        if (!settleWater(cell.x, cell.y, cell.z)) continue;
+        changed = true;
+        if (cell.x < minX) minX = cell.x;
+        if (cell.x > maxX) maxX = cell.x;
+        if (cell.y < minY) minY = cell.y;
+        if (cell.y > maxY) maxY = cell.y;
+        if (cell.z < minZ) minZ = cell.z;
+        if (cell.z > maxZ) maxZ = cell.z;
     }
 }
 
@@ -1787,6 +1820,7 @@ void tickWater(float dt, float time) {
     int minX = 100000, minY = HEIGHT, minZ = 100000;
     int maxX = -100000, maxY = 0, maxZ = -100000;
     drainWater(changed, minX, minY, minZ, maxX, maxY, maxZ);
+    pumpDelays(dt, changed, minX, minY, minZ, maxX, maxY, maxZ);
     if (changed && minX <= maxX) {
         dirtyWaterAround(minX, minZ);
         dirtyWaterAround(maxX, maxZ);
@@ -1938,7 +1972,7 @@ void setBlock(int x, int y, int z, Block value, int meta) {
     gSavePending = true;
     if (!gReacting)
         resolveFluidContact(x, y, z);
-    enqueueAround(x, y, z);
+    scheduleAround(x, y, z);
 }
 
 int waterLevelAt(int x, int y, int z) {

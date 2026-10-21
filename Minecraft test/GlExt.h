@@ -47,4 +47,5 @@ struct GlApi {
 extern GlApi glx;
 
 bool initGlExtensions();
+const char* lastGlShaderError();
 unsigned makeGlProgram(const char* vs, const char* fs);

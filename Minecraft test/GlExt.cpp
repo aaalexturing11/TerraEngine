@@ -1,6 +1,18 @@
 #include "GlExt.h"
 
+#include <cstdio>
+#include <cstring>
 #include <iostream>
+
+static char gGlErr[1400];
+
+static void rememberGl(const char* what, const char* log) {
+    size_t used = std::strlen(gGlErr);
+    if (used > 1000) return;
+    std::snprintf(gGlErr + used, sizeof(gGlErr) - used, "%s%s\n", what, log ? log : "");
+}
+
+const char* lastGlShaderError() { return gGlErr; }
 
 GlApi glx{};
 
@@ -12,6 +24,7 @@ static T loadProc(const char* name) {
 }
 
 bool initGlExtensions() {
+    gGlErr[0] = 0;
     glx.CreateShader = loadProc<PFNGLCREATESHADERPROC>("glCreateShader");
     glx.ShaderSource = loadProc<PFNGLSHADERSOURCEPROC>("glShaderSource");
     glx.CompileShader = loadProc<PFNGLCOMPILESHADERPROC>("glCompileShader");
@@ -63,6 +76,7 @@ static unsigned compileStage(unsigned type, const char* src) {
         char log[1024];
         glx.GetShaderInfoLog(s, 1024, nullptr, log);
         std::cerr << "Shader:\n" << log << "\n";
+        rememberGl("Shader: ", log);
         glx.DeleteShader(s);
         return 0;
     }
@@ -85,6 +99,7 @@ unsigned makeGlProgram(const char* vs, const char* fs) {
         char log[1024];
         glx.GetProgramInfoLog(p, 1024, nullptr, log);
         std::cerr << "Link:\n" << log << "\n";
+        rememberGl("Link: ", log);
         glx.DeleteProgram(p);
         return 0;
     }
