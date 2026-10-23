@@ -102,11 +102,37 @@ static float gSwing = 0.0f;
 static float gSwingRate = 5.0f;
 static float gSwingVis = 0.0f;
 static bool gMine = true;
-static float gItemGrowMain = 1.0f;
-static float gItemGrowOff = 1.0f;
 static Block gSeenMain = Block::Air;
 static Block gSeenOff = Block::Air;
 static bool gHandsPrimed = false;
+static float gRaiseR = 0.0f;
+static float gRaiseL = 0.0f;
+static float gPass = -1.0f;
+static Block gFromR = Block::Air;
+static Block gFromL = Block::Air;
+static Block gToR = Block::Air;
+static Block gToL = Block::Air;
+static float gDip = 0.0f;
+static float gDipL = 0.0f;
+static Block gDipFrom = Block::Air;
+static Block gDipFromL = Block::Air;
+static Block gStowR = Block::Air;
+static Block gStowL = Block::Air;
+
+struct HandVis {
+    glm::mat4 rightArm{ 1.0f };
+    glm::mat4 leftArm{ 1.0f };
+    glm::mat4 rightItem{ 1.0f };
+    glm::mat4 leftItem{ 1.0f };
+    glm::mat4 travelR{ 1.0f };
+    glm::mat4 travelL{ 1.0f };
+    Block rightBlock = Block::Air;
+    Block leftBlock = Block::Air;
+    bool passing = false;
+    glm::vec3 torchPos{ 0.0f };
+    bool torch = false;
+};
+static HandVis gVis;
 static float gLand = 0.0f;
 static float gGlow = 0.0f;
 static glm::vec3 gLightPos(0.0f);
@@ -547,10 +573,40 @@ static glm::mat4 viewmodelArm() {
     return gViewInv * pushArmInFront(viewArm);
 }
 
-static glm::mat4 bodyRightArm() {
+static float ease(float a, float b, float x) {
+    float t = (x - a) / (b - a);
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    return t * t * (3.0f - 2.0f * t);
+}
+
+static glm::mat4 mixMat(const glm::mat4& a, const glm::mat4& b, float t) {
+    glm::mat4 m(1.0f);
+    for (int i = 0; i < 4; ++i) m[i] = glm::mix(a[i], b[i], t);
+    return m;
+}
+
+static glm::mat4 solveArm(bool left, float raise, float meet) {
     float arm = (gStyle == SkinArmStyle::Slim) ? 5.5f : 6.0f;
-    float swing = 1.05f + gPose.armR * 0.22f + gSwingVis * 0.40f;
-    return limbMatrix(glm::vec3(-arm, 24.0f, 0.0f), swing, -0.12f, false);
+    float pivotX = left ? arm : -arm;
+    float pose = left ? gPose.armL : gPose.armR;
+    bool mirror = left && gLegacy;
+    float held = 1.05f + pose * 0.22f;
+    if (!left) held += gSwingVis * 0.40f;
+    float dip = left ? gDipL : gDip;
+    float bell = std::sin((1.0f - dip) * PI);
+    if (dip > 0.0f) held = glm::mix(held, held * 0.62f, bell);
+    float forward = glm::mix(pose, held, raise);
+    forward = glm::mix(forward, 0.90f, meet);
+    if (!left && raise < 0.8f)
+        forward = glm::mix(forward, 1.28f, gSwingVis);
+    float yaw = (left ? -34.0f : 34.0f) * meet;
+    if (!left && raise < 0.8f) yaw = glm::mix(yaw, 18.0f, gSwingVis * 0.45f);
+    float restRoll = (left ? 0.10f : -0.10f) + std::sin(gTime * 1.3f) * 0.02f * (1.0f - gWalk);
+    float heldRoll = left ? 0.12f : -0.12f;
+    float roll = glm::mix(restRoll, heldRoll, raise);
+    roll = glm::mix(roll, left ? 0.04f : -0.04f, meet);
+    return limbMatrix(glm::vec3(pivotX, 24.0f, 0.0f), forward, roll, mirror, yaw);
 }
 
 static glm::mat4 heldMatrixAt(const glm::mat4& armWorld, Block block, glm::vec3& flame, bool left) {
@@ -589,29 +645,6 @@ static glm::mat4 heldMatrixAt(const glm::mat4& armWorld, Block block, glm::vec3&
     return m;
 }
 
-static glm::mat4 leftArmMatrix() {
-    float arm = (gStyle == SkinArmStyle::Slim) ? 5.5f : 6.0f;
-    bool raised = cameraFirstPerson() && !lookingDown();
-    if (!raised) {
-        float out = 0.10f + std::sin(gTime * 1.3f) * 0.02f * (1.0f - gWalk);
-        return limbMatrix(glm::vec3(arm, 24.0f, 0.0f), gPose.armL, out, gLegacy);
-    }
-    float swing = 1.05f + gPose.armL * 0.22f;
-    return limbMatrix(glm::vec3(arm, 24.0f, 0.0f), swing, 0.12f, gLegacy);
-}
-
-static glm::mat4 slideItem(const glm::mat4& from, const glm::mat4& to, float k) {
-    glm::mat4 m = to;
-    m[3] = glm::mix(from[3], to[3], k);
-    return m;
-}
-
-static float swapBlend() {
-    float s = inventorySwapAmount();
-    float e = s * s * (3.0f - 2.0f * s);
-    return 1.0f - e;
-}
-
 static glm::vec3 torchTip(const glm::mat4& m) {
     glm::vec3 dir = glm::vec3(m[1]);
     float len = glm::length(dir);
@@ -619,20 +652,136 @@ static glm::vec3 torchTip(const glm::mat4& m) {
     return glm::vec3(m[3]) + dir * ((10.0f / 16.0f * 0.42f) / len);
 }
 
-static glm::mat4 shownItem(const glm::mat4& rightArm, const glm::mat4& leftArm, Block block, bool mainHand) {
+static glm::mat4 travelItem(const glm::mat4& rightArm, const glm::mat4& leftArm, Block block, bool startedRight, float pass, bool both) {
     glm::vec3 flame;
-    glm::mat4 atRight = heldMatrixAt(rightArm, block, flame, false);
-    glm::mat4 atLeft = heldMatrixAt(leftArm, block, flame, true);
-    float k = swapBlend();
-    return mainHand ? slideItem(atLeft, atRight, k) : slideItem(atRight, atLeft, k);
+    glm::mat4 from = heldMatrixAt(startedRight ? rightArm : leftArm, block, flame, !startedRight);
+    glm::mat4 to = heldMatrixAt(startedRight ? leftArm : rightArm, block, flame, startedRight);
+    float u = ease(0.32f, 0.68f, pass);
+    glm::mat4 m = mixMat(from, to, u);
+    float arc = std::sin(u * PI);
+    float lift = both ? (startedRight ? 0.11f : -0.07f) : 0.03f;
+    float push = both ? (startedRight ? 0.04f : 0.09f) : 0.02f;
+    glm::vec3 fwd = glm::vec3(playerRoot()[2]);
+    fwd.y = 0.0f;
+    if (glm::dot(fwd, fwd) > 0.0001f) fwd = glm::normalize(fwd);
+    else fwd = glm::vec3(0.0f, 0.0f, -1.0f);
+    m[3] += glm::vec4(glm::vec3(0.0f, 1.0f, 0.0f) * lift * arc + fwd * push * arc, 0.0f);
+    return m;
 }
 
-static glm::mat4 scaleGrip(const glm::mat4& m, float s) {
-    glm::mat4 o = m;
-    o[0] *= s;
-    o[1] *= s;
-    o[2] *= s;
-    return o;
+static void updateHands(float dt, Block mainItem, Block offItem) {
+    bool started = false;
+    bool aborted = false;
+    if (gHandsPrimed && gPass < 0.0f && offItem == gSeenMain && mainItem == gSeenOff
+        && (mainItem != gSeenMain || offItem != gSeenOff)) {
+        gFromR = gSeenMain;
+        gFromL = gSeenOff;
+        gToR = mainItem;
+        gToL = offItem;
+        gPass = 0.0f;
+        gDip = gDipL = 0.0f;
+        gStowR = gStowL = Block::Air;
+        started = true;
+    }
+    if (gPass >= 0.0f && (mainItem != gToR || offItem != gToL)) {
+        if (mainItem == gFromR && offItem == gFromL) {
+            float u = ease(0.32f, 0.68f, gPass);
+            if (u < 0.5f) {
+                gPass = -1.0f;
+                aborted = true;
+            }
+            else {
+                Block arrivedR = gFromL;
+                Block arrivedL = gFromR;
+                gFromR = arrivedR;
+                gFromL = arrivedL;
+                gToR = mainItem;
+                gToL = offItem;
+                gPass = 0.0f;
+                started = true;
+            }
+        }
+        else {
+            gPass = -1.0f;
+        }
+    }
+    if (gPass >= 0.0f) {
+        gPass += dt * 1.65f;
+        if (gPass >= 1.0f) {
+            gPass = -1.0f;
+            gStowR = gStowL = Block::Air;
+        }
+    }
+    if (gHandsPrimed && !started && !aborted && gPass < 0.0f) {
+        if (mainItem != gSeenMain && mainItem != Block::Air && gSeenMain != Block::Air && offItem == gSeenOff) {
+            gDip = 1.0f;
+            gDipFrom = gSeenMain;
+        }
+        if (offItem != gSeenOff && offItem != Block::Air && gSeenOff != Block::Air && mainItem == gSeenMain) {
+            gDipL = 1.0f;
+            gDipFromL = gSeenOff;
+        }
+        if (mainItem == Block::Air && gSeenMain != Block::Air) gStowR = gSeenMain;
+        if (offItem == Block::Air && gSeenOff != Block::Air) gStowL = gSeenOff;
+    }
+    if (gDip > 0.0f) {
+        gDip -= dt * 3.6f;
+        if (gDip < 0.0f) gDip = 0.0f;
+    }
+    if (gDipL > 0.0f) {
+        gDipL -= dt * 3.6f;
+        if (gDipL < 0.0f) gDipL = 0.0f;
+    }
+
+    bool passing = gPass >= 0.0f;
+    float meet = 0.0f;
+    if (passing) {
+        float approach = ease(0.0f, 0.36f, gPass);
+        float depart = ease(0.64f, 1.0f, gPass);
+        meet = approach * (1.0f - depart);
+    }
+    float targetR = passing ? 1.0f : (mainItem != Block::Air ? 1.0f : gSwingVis);
+    float targetL = passing ? 1.0f : (offItem != Block::Air ? 1.0f : 0.0f);
+    gRaiseR = damp(gRaiseR, targetR, dt, 8.0f);
+    gRaiseL = damp(gRaiseL, targetL, dt, 8.0f);
+    if (!passing && gRaiseR < 0.08f) gStowR = Block::Air;
+    if (!passing && gRaiseL < 0.08f) gStowL = Block::Air;
+
+    gVis.passing = passing;
+    gVis.rightArm = solveArm(false, gRaiseR, meet);
+    gVis.leftArm = solveArm(true, gRaiseL, meet);
+    bool both = gFromR != Block::Air && gFromL != Block::Air;
+    if (passing) {
+        gVis.rightBlock = Block::Air;
+        gVis.leftBlock = Block::Air;
+        gVis.travelR = gFromR != Block::Air ? travelItem(gVis.rightArm, gVis.leftArm, gFromR, true, gPass, both) : glm::mat4(1.0f);
+        gVis.travelL = gFromL != Block::Air ? travelItem(gVis.rightArm, gVis.leftArm, gFromL, false, gPass, both) : glm::mat4(1.0f);
+    }
+    else {
+        gVis.rightBlock = mainItem != Block::Air ? mainItem : gStowR;
+        gVis.leftBlock = offItem != Block::Air ? offItem : gStowL;
+        if (gDip > 0.5f && gDipFrom != Block::Air) gVis.rightBlock = gDipFrom;
+        if (gDipL > 0.5f && gDipFromL != Block::Air) gVis.leftBlock = gDipFromL;
+        glm::vec3 flame;
+        if (gVis.rightBlock != Block::Air)
+            gVis.rightItem = heldMatrixAt(gVis.rightArm, gVis.rightBlock, flame, false);
+        if (gVis.leftBlock != Block::Air)
+            gVis.leftItem = heldMatrixAt(gVis.leftArm, gVis.leftBlock, flame, true);
+    }
+
+    gVis.torch = false;
+    if (passing) {
+        bool rightTorch = gFromR == Block::Torch;
+        bool leftTorch = gFromL == Block::Torch;
+        if (rightTorch && !leftTorch) { gVis.torchPos = torchTip(gVis.travelR); gVis.torch = true; }
+        else if (leftTorch) { gVis.torchPos = torchTip(gVis.travelL); gVis.torch = true; }
+    }
+    else if (gVis.rightBlock == Block::Torch) { gVis.torchPos = torchTip(gVis.rightItem); gVis.torch = true; }
+    else if (gVis.leftBlock == Block::Torch) { gVis.torchPos = torchTip(gVis.leftItem); gVis.torch = true; }
+
+    gSeenMain = mainItem;
+    gSeenOff = offItem;
+    gHandsPrimed = true;
 }
 
 static HeldDraw heldFor(Block block) {
@@ -813,32 +962,9 @@ void characterSync(float dt, float time, bool motionLocked) {
 
     Block mainItem = placeSlotBlock(selectedPlaceSlot());
     Block offItem = inventoryOffhand();
-    bool mainTorch = mainItem == Block::Torch;
-    bool offTorch = offItem == Block::Torch;
-    gGlow = damp(gGlow, (mainTorch || offTorch) ? 1.0f : 0.0f, dt, 8.0f);
-    if (mainTorch || offTorch) {
-        glm::mat4 rightArm = bodyRightArm();
-        glm::mat4 leftArm = leftArmMatrix();
-        glm::mat4 shown = shownItem(rightArm, leftArm, mainTorch ? mainItem : offItem, mainTorch);
-        gLightPos = torchTip(shown);
-    }
-    if (!gHandsPrimed) {
-        gSeenMain = mainItem;
-        gSeenOff = offItem;
-        gHandsPrimed = true;
-    }
-    else {
-        if (mainItem != gSeenMain) {
-            if (inventorySwapAmount() < 0.08f && mainItem != Block::Air) gItemGrowMain = 0.0f;
-            gSeenMain = mainItem;
-        }
-        if (offItem != gSeenOff) {
-            if (inventorySwapAmount() < 0.08f && offItem != Block::Air) gItemGrowOff = 0.0f;
-            gSeenOff = offItem;
-        }
-    }
-    gItemGrowMain = damp(gItemGrowMain, 1.0f, dt, 14.0f);
-    gItemGrowOff = damp(gItemGrowOff, 1.0f, dt, 14.0f);
+    updateHands(dt, mainItem, offItem);
+    gGlow = damp(gGlow, gVis.torch ? 1.0f : 0.0f, dt, 8.0f);
+    if (gVis.torch) gLightPos = gVis.torchPos;
     float flick = 0.94f + 0.06f * std::sin(time * 11.0f) * std::sin(time * 7.13f);
     if (gGlow < 0.02f) {
         gLightColor = glm::vec3(0.0f);
@@ -1121,12 +1247,6 @@ void renderPlayerCharacter(const DayNightLighting& light, float time) {
         drawBody(PantsR, limbMatrix(glm::vec3(-2, 12, 0), gPose.legR, -gLegSpread, false, gFootYawR), false);
         drawBody(Body, body, false);
         drawBody(Jacket, body, false);
-        glm::mat4 leftArm = leftArmMatrix();
-        if (gLegacy) drawBody(ArmR, leftArm, true);
-        else {
-            drawBody(ArmL, leftArm, false);
-            drawBody(SleeveL, leftArm, false);
-        }
     }
     if (!first) {
         glm::mat4 head = glm::translate(root, glm::vec3(0.0f, 24.0f, 0.0f) * kScale);
@@ -1135,29 +1255,25 @@ void renderPlayerCharacter(const DayNightLighting& light, float time) {
         drawBody(Hat, head, false);
     }
 
-    glm::mat4 rightArm = bodyRightArm();
-    glm::mat4 leftArm = leftArmMatrix();
-    Block mainItem = placeSlotBlock(selectedPlaceSlot());
-    Block offItem = inventoryOffhand();
-    bool raised = first && !showBody;
-    bool showOffArm = raised && (offItem != Block::Air || inventorySwapAmount() > 0.02f);
-    drawBody(ArmR, rightArm, false);
-    drawBody(SleeveR, rightArm, false);
-    if (showOffArm) {
-        if (gLegacy) drawBody(ArmR, leftArm, true);
-        else {
-            drawBody(ArmL, leftArm, false);
-            drawBody(SleeveL, leftArm, false);
-        }
+    drawBody(ArmR, gVis.rightArm, false);
+    drawBody(SleeveR, gVis.rightArm, false);
+    if (gLegacy) drawBody(ArmR, gVis.leftArm, true);
+    else {
+        drawBody(ArmL, gVis.leftArm, false);
+        drawBody(SleeveL, gVis.leftArm, false);
     }
     glx.BindVertexArray(0);
 
     bindOpaqueShader(light, time);
     glEnable(GL_DEPTH_TEST);
-    if (mainItem != Block::Air)
-        drawHeld(scaleGrip(shownItem(rightArm, leftArm, mainItem, true), gItemGrowMain), mainItem, sky, lamp, time);
-    if (offItem != Block::Air)
-        drawHeld(scaleGrip(shownItem(rightArm, leftArm, offItem, false), gItemGrowOff), offItem, sky, lamp, time);
+    if (gVis.passing) {
+        if (gFromR != Block::Air) drawHeld(gVis.travelR, gFromR, sky, lamp, time);
+        if (gFromL != Block::Air) drawHeld(gVis.travelL, gFromL, sky, lamp, time);
+    }
+    else {
+        if (gVis.rightBlock != Block::Air) drawHeld(gVis.rightItem, gVis.rightBlock, sky, lamp, time);
+        if (gVis.leftBlock != Block::Air) drawHeld(gVis.leftItem, gVis.leftBlock, sky, lamp, time);
+    }
     glFrontFace(GL_CCW);
     glDisable(GL_POLYGON_OFFSET_FILL);
     if (!cull) glDisable(GL_CULL_FACE);
