@@ -27,7 +27,7 @@
     <ClInclude Include="Resource.h">
       <Filter>Archivos de encabezado</Filter>
     </ClInclude>
-    <ClInclude Include="Minecraft test.h">
+    <ClInclude Include="terraEngine.h">
       <Filter>Archivos de encabezado</Filter>
     </ClInclude>
     <ClInclude Include="Config.h">
@@ -65,7 +65,7 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Minecraft test.cpp">
+    <ClCompile Include="terraEngine.cpp">
       <Filter>Archivos de origen</Filter>
     </ClCompile>
     <ClCompile Include="World.cpp">
@@ -97,7 +97,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="Minecraft test.rc">
+    <ResourceCompile Include="terraEngine.rc">
       <Filter>Archivos de recursos</Filter>
     </ResourceCompile>
   </ItemGroup>
@@ -105,7 +105,7 @@
     <Image Include="small.ico">
       <Filter>Archivos de recursos</Filter>
     </Image>
-    <Image Include="Minecraft test.ico">
+    <Image Include="terraEngine.ico">
       <Filter>Archivos de recursos</Filter>
     </Image>
   </ItemGroup>

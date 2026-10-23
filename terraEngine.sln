@@ -1,9 +1,9 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
-VisualStudioVersion = 17.12.35527.113 d17.12
+VisualStudioVersion = 17.12.35527.113
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Minecraft test", "Minecraft test\Minecraft test.vcxproj", "{ADAAEA42-7D9C-445B-BB82-C0783F9F10DF}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "terraEngine", "terraEngine\terraEngine.vcxproj", "{ADAAEA42-7D9C-445B-BB82-C0783F9F10DF}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

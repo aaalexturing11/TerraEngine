@@ -22,7 +22,7 @@
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{adaaea42-7d9c-445b-bb82-c0783f9f10df}</ProjectGuid>
-    <RootNamespace>Minecrafttest</RootNamespace>
+    <RootNamespace>terraEngine</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -142,7 +142,7 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="Lighting.h" />
     <ClInclude Include="MathUtil.h" />
-    <ClInclude Include="Minecraft test.h" />
+    <ClInclude Include="terraEngine.h" />
     <ClInclude Include="PauseMenu.h" />
     <ClInclude Include="PostFX.h" />
     <ClInclude Include="Raycast.h" />
@@ -160,7 +160,7 @@
     <ClCompile Include="FluidSolver.cpp" />
     <ClCompile Include="GlExt.cpp" />
     <ClCompile Include="Lighting.cpp" />
-    <ClCompile Include="Minecraft test.cpp" />
+    <ClCompile Include="terraEngine.cpp" />
     <ClCompile Include="PauseMenu.cpp" />
     <ClCompile Include="PostFX.cpp" />
     <ClCompile Include="Raycast.cpp" />
@@ -169,10 +169,10 @@
     <ClCompile Include="World.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="Minecraft test.rc" />
+    <ResourceCompile Include="terraEngine.rc" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="Minecraft test.ico" />
+    <Image Include="terraEngine.ico" />
     <Image Include="small.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
