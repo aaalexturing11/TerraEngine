@@ -5,11 +5,124 @@
 #include "World.h"
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <algorithm>
+#include <cmath>
 #include <limits>
 
 glm::ivec3 selectedBlock(-1);
 bool hasSelected = false;
 glm::ivec3 hitNormal(0);
+
+static bool rayOrientedBox(const glm::vec3& origin, const glm::vec3& dir,
+    const glm::vec3& center, const glm::vec3 axes[3], const glm::vec3& he,
+    float maxT, float& tHit, glm::vec3& outN) {
+    float tMin = 0.0f;
+    float tMax = maxT;
+    glm::vec3 p = center - origin;
+    glm::vec3 nMin(0.0f);
+    for (int i = 0; i < 3; ++i) {
+        float e = glm::dot(axes[i], p);
+        float f = glm::dot(axes[i], dir);
+        if (std::fabs(f) > 1.0e-6f) {
+            float t1 = (e + he[i]) / f;
+            float t2 = (e - he[i]) / f;
+            glm::vec3 n1 = axes[i];
+            glm::vec3 n2 = -axes[i];
+            if (t1 > t2) {
+                std::swap(t1, t2);
+                std::swap(n1, n2);
+            }
+            if (t1 > tMin) {
+                tMin = t1;
+                nMin = n1;
+            }
+            if (t2 < tMax) tMax = t2;
+            if (tMin > tMax || tMax < 0.0f) return false;
+        }
+        else if (-e - he[i] > 0.0f || -e + he[i] < 0.0f) {
+            return false;
+        }
+    }
+    tHit = tMin;
+    outN = nMin;
+    return tHit <= maxT;
+}
+
+static glm::ivec3 dominantNormal(const glm::vec3& n) {
+    float ax = std::fabs(n.x), ay = std::fabs(n.y), az = std::fabs(n.z);
+    if (ax < 1.0e-4f && ay < 1.0e-4f && az < 1.0e-4f) return glm::ivec3(0);
+    if (ay >= ax && ay >= az) return glm::ivec3(0, n.y >= 0.0f ? 1 : -1, 0);
+    if (ax >= az) return glm::ivec3(n.x >= 0.0f ? 1 : -1, 0, 0);
+    return glm::ivec3(0, 0, n.z >= 0.0f ? 1 : -1);
+}
+
+static bool torchBox(int x, int y, int z, glm::vec3& center, glm::vec3 axes[3], glm::vec3& he) {
+    int facing = blockMeta(x, y, z);
+    glm::vec3 axis(0.0f, 1.0f, 0.0f);
+    glm::vec3 base(x + 0.5f, (float)y, z + 0.5f);
+    if (facing == 1) {
+        axis = glm::normalize(glm::vec3(1, 1, 0));
+        base = glm::vec3((float)x, y + 0.22f, z + 0.5f);
+    }
+    else if (facing == 2) {
+        axis = glm::normalize(glm::vec3(-1, 1, 0));
+        base = glm::vec3(x + 1.0f, y + 0.22f, z + 0.5f);
+    }
+    else if (facing == 3) {
+        axis = glm::normalize(glm::vec3(0, 1, 1));
+        base = glm::vec3(x + 0.5f, y + 0.22f, (float)z);
+    }
+    else if (facing == 4) {
+        axis = glm::normalize(glm::vec3(0, 1, -1));
+        base = glm::vec3(x + 0.5f, y + 0.22f, z + 1.0f);
+    }
+    glm::vec3 hint = std::abs(axis.y) > 0.95f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+    axes[0] = glm::normalize(glm::cross(axis, hint));
+    axes[1] = glm::normalize(glm::cross(axes[0], axis));
+    axes[2] = axis;
+    float half = 1.0f / 16.0f + 0.02f;
+    float len = 10.0f / 16.0f + 0.045f;
+    base -= axis * 0.015f;
+    center = base + axis * (len * 0.5f);
+    he = glm::vec3(half, half, len * 0.5f);
+    return true;
+}
+
+static bool shapeHit(Block block, int x, int y, int z,
+    const glm::vec3& origin, const glm::vec3& dir, float maxT, float& tHit, glm::vec3& outN) {
+    if (block == Block::Torch) {
+        glm::vec3 center, he, axes[3];
+        torchBox(x, y, z, center, axes, he);
+        return rayOrientedBox(origin, dir, center, axes, he, maxT, tHit, outN);
+    }
+    if (!isPlant(block)) return false;
+    glm::vec3 center(x + 0.5f, y + 0.5f, z + 0.5f);
+    glm::vec3 up(0.0f, 1.0f, 0.0f);
+    glm::vec3 diagonals[2] = {
+        glm::normalize(glm::vec3(1.0f, 0.0f, 1.0f)),
+        glm::normalize(glm::vec3(-1.0f, 0.0f, 1.0f))
+    };
+    bool hit = false;
+    float best = maxT;
+    for (const glm::vec3& along : diagonals) {
+        glm::vec3 axes[3] = { along, up, glm::normalize(glm::cross(along, up)) };
+        glm::vec3 he(0.7072f, 0.5f, 0.07f);
+        float t = 0.0f;
+        glm::vec3 n(0.0f);
+        if (!rayOrientedBox(origin, dir, center, axes, he, maxT, t, n)) continue;
+        if (t <= best) {
+            best = t;
+            outN = n;
+            hit = true;
+        }
+    }
+    if (hit) tHit = best;
+    return hit;
+}
+
+static bool fullCube(Block block) {
+    return block != Block::Air && block != Block::Water && block != Block::Torch && !isPlant(block);
+}
 
 void updateSelectedBlock(GLFWwindow* window) {
     const float maxDist = 8.0f;
@@ -53,16 +166,29 @@ void updateSelectedBlock(GLFWwindow* window) {
     hasSelected = false;
     hitNormal = glm::ivec3(0);
     float dist = 0.0f;
-    auto selectable = [](int x, int y, int z) {
-        Block b = blockAt(x, y, z);
-        return b != Block::Air && b != Block::Water;
+    glm::vec3 rayOrigin = camPos;
+
+    auto acceptShape = [&](int x, int y, int z, float tExit) {
+        Block block = blockAt(x, y, z);
+        float t = 0.0f;
+        glm::vec3 n(0.0f);
+        if (!shapeHit(block, x, y, z, rayOrigin, rayDir, maxDist, t, n)) return false;
+        if (t > tExit + 0.001f) return false;
+        selectedBlock = glm::ivec3(x, y, z);
+        hasSelected = true;
+        hitNormal = dominantNormal(n);
+        return true;
     };
 
-    if (selectable(voxel.x, voxel.y, voxel.z)) {
+    Block here = blockAt(voxel.x, voxel.y, voxel.z);
+    float tExit = std::min(tMax.x, std::min(tMax.y, tMax.z));
+    if (fullCube(here)) {
         selectedBlock = voxel;
         hasSelected = true;
         return;
     }
+    if ((here == Block::Torch || isPlant(here)) && acceptShape(voxel.x, voxel.y, voxel.z, tExit))
+        return;
 
     while (dist < maxDist) {
         int axis;
@@ -76,13 +202,17 @@ void updateSelectedBlock(GLFWwindow* window) {
 
         if (dist > maxDist) break;
 
-        if (selectable(voxel.x, voxel.y, voxel.z)) {
+        Block block = blockAt(voxel.x, voxel.y, voxel.z);
+        if (fullCube(block)) {
             selectedBlock = voxel;
             hasSelected = true;
             hitNormal = glm::ivec3(0);
             hitNormal[axis] = -step[axis];
             return;
         }
+        float leave = std::min(tMax.x, std::min(tMax.y, tMax.z));
+        if ((block == Block::Torch || isPlant(block)) && acceptShape(voxel.x, voxel.y, voxel.z, leave))
+            return;
     }
 }
 

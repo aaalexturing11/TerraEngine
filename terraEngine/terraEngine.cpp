@@ -262,7 +262,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         renderPlayerCharacter(light, time);
 
         if (hasSelected) {
-            drawCubeOutline(selectedBlock.x + 0.5f, selectedBlock.y + 0.5f, selectedBlock.z + 0.5f, 1.0f);
+            drawSelectionOutline(selectedBlock.x, selectedBlock.y, selectedBlock.z);
         }
 
         glm::vec3 look = cameraLookDirection();

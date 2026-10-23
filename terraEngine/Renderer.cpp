@@ -217,6 +217,18 @@ static void emitBox(int bx, int by, int bz, float hs, bool shaded) {
     face(glm::vec3(-1, 0, 0), { x - hs, y - hs, z - hs }, { x - hs, y - hs, z + hs }, { x - hs, y + hs, z + hs }, { x - hs, y + hs, z - hs }, sideTex, uv00, uv10, uv11, uv01);
 }
 
+static void drawOutlineEdges(const glm::vec3* corners, const int edges[][2], int count) {
+    glColor3f(1.0f, 0.5f, 0.0f);
+    glLineWidth(4.0f);
+    glBegin(GL_LINES);
+    for (int i = 0; i < count; ++i) {
+        glVertex3fv(&corners[edges[i][0]].x);
+        glVertex3fv(&corners[edges[i][1]].x);
+    }
+    glEnd();
+    glLineWidth(1.0f);
+}
+
 void drawCubeOutline(float cx, float cy, float cz, float size) {
     float hs = size * 0.5f;
     glm::vec3 corners[8] = {
@@ -230,15 +242,73 @@ void drawCubeOutline(float cx, float cy, float cz, float size) {
         {4,5},{5,6},{6,7},{7,4},
         {0,4},{1,5},{2,6},{3,7}
     };
-    glColor3f(1.0f, 0.5f, 0.0f);
-    glLineWidth(4.0f);
-    glBegin(GL_LINES);
-    for (int i = 0; i < 12; ++i) {
-        glVertex3fv(&corners[edges[i][0]].x);
-        glVertex3fv(&corners[edges[i][1]].x);
+    drawOutlineEdges(corners, edges, 12);
+}
+
+static void drawCrossOutline(int x, int y, int z) {
+    glm::vec3 c(x + 0.5f, y + 0.5f, z + 0.5f);
+    auto puff = [&](float px, float py, float pz) {
+        return c + (glm::vec3(px, py, pz) - c) * 1.04f;
+    };
+    float x0 = (float)x, x1 = x0 + 1.0f;
+    float y0 = (float)y, y1 = y0 + 1.0f;
+    float z0 = (float)z, z1 = z0 + 1.0f;
+    glm::vec3 corners[8] = {
+        puff(x0, y0, z0), puff(x1, y0, z1), puff(x1, y1, z1), puff(x0, y1, z0),
+        puff(x1, y0, z0), puff(x0, y0, z1), puff(x0, y1, z1), puff(x1, y1, z0)
+    };
+    int edges[8][2] = {
+        {0,1},{1,2},{2,3},{3,0},
+        {4,5},{5,6},{6,7},{7,4}
+    };
+    drawOutlineEdges(corners, edges, 8);
+}
+
+static void drawTorchOutline(int x, int y, int z) {
+    int facing = blockMeta(x, y, z);
+    glm::vec3 axis(0, 1, 0);
+    glm::vec3 base(x + 0.5f, (float)y, z + 0.5f);
+    if (facing == 1) {
+        axis = glm::normalize(glm::vec3(1, 1, 0));
+        base = glm::vec3((float)x, y + 0.22f, z + 0.5f);
     }
-    glEnd();
-    glLineWidth(1.0f);
+    else if (facing == 2) {
+        axis = glm::normalize(glm::vec3(-1, 1, 0));
+        base = glm::vec3(x + 1.0f, y + 0.22f, z + 0.5f);
+    }
+    else if (facing == 3) {
+        axis = glm::normalize(glm::vec3(0, 1, 1));
+        base = glm::vec3(x + 0.5f, y + 0.22f, (float)z);
+    }
+    else if (facing == 4) {
+        axis = glm::normalize(glm::vec3(0, 1, -1));
+        base = glm::vec3(x + 0.5f, y + 0.22f, z + 1.0f);
+    }
+    glm::vec3 hint = std::abs(axis.y) > 0.95f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+    glm::vec3 right = glm::normalize(glm::cross(axis, hint));
+    glm::vec3 fwd = glm::normalize(glm::cross(right, axis));
+    float half = 1.0f / 16.0f + 0.02f;
+    base -= axis * 0.015f;
+    glm::vec3 tip = base + axis * (10.0f / 16.0f + 0.045f);
+    glm::vec3 rx = right * half;
+    glm::vec3 fz = fwd * half;
+    glm::vec3 corners[8] = {
+        base - rx - fz, base + rx - fz, base + rx + fz, base - rx + fz,
+        tip - rx - fz, tip + rx - fz, tip + rx + fz, tip - rx + fz
+    };
+    int edges[12][2] = {
+        {0,1},{1,2},{2,3},{3,0},
+        {4,5},{5,6},{6,7},{7,4},
+        {0,4},{1,5},{2,6},{3,7}
+    };
+    drawOutlineEdges(corners, edges, 12);
+}
+
+void drawSelectionOutline(int x, int y, int z) {
+    Block block = blockAt(x, y, z);
+    if (block == Block::Torch) drawTorchOutline(x, y, z);
+    else if (isPlant(block)) drawCrossOutline(x, y, z);
+    else drawCubeOutline(x + 0.5f, y + 0.5f, z + 0.5f, 1.0f);
 }
 
 void drawCrosshair(int w, int h) {

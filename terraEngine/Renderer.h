@@ -5,6 +5,7 @@
 
 void setup3D(int w, int h);
 void drawCubeOutline(float cx, float cy, float cz, float size);
+void drawSelectionOutline(int x, int y, int z);
 void drawCrosshair(int w, int h);
 void drawBillboardTextured(const glm::vec3& pos, const glm::vec3& viewDir, float radius, unsigned int tex, float brightness);
 
