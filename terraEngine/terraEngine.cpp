@@ -217,7 +217,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             glLoadIdentity();
             glm::vec3 renderEye, renderFocus;
             cameraRenderFrame(renderEye, renderFocus);
-            gluLookAt(renderEye.x, renderEye.y, renderEye.z, renderFocus.x, renderFocus.y, renderFocus.z, 0, 1, 0);
+            glm::vec3 viewUp = cameraViewUp();
+            gluLookAt(renderEye.x, renderEye.y, renderEye.z, renderFocus.x, renderFocus.y, renderFocus.z, viewUp.x, viewUp.y, viewUp.z);
 
             glm::vec3 viewDir = cameraLookDirection();
             glDepthMask(GL_FALSE);
@@ -253,7 +254,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         glm::vec3 eye, focus;
         cameraRenderFrame(eye, focus);
         glm::mat4 proj = glm::perspective(glm::radians(cameraFov()), sceneAspect, 0.12f, 360.0f);
-        glm::mat4 view = glm::lookAt(eye, focus, glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::mat4 view = glm::lookAt(eye, focus, cameraViewUp());
         glm::mat4 viewProj = proj * view;
         bindWaterShader(viewProj, cameraPosition(), light.skyColor, light.sunDir, light.sunIntensity, time);
         renderWaterBlocks(renderRadiusXZ, renderMaxY);
@@ -266,7 +267,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 
         glm::vec3 look = cameraLookDirection();
         glm::vec3 sun = glm::normalize(light.sunDir);
-        glm::vec3 right = glm::normalize(glm::cross(look, glm::vec3(0, 1, 0)));
+        glm::vec3 right = glm::cross(look, cameraViewUp());
+        float rightLen = glm::length(right);
+        if (rightLen < 0.001f) right = glm::vec3(1.0f, 0.0f, 0.0f);
+        else right /= rightLen;
         glm::vec3 upv = glm::normalize(glm::cross(right, look));
         float vx = glm::dot(sun, right);
         float vy = glm::dot(sun, upv);

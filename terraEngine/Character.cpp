@@ -457,7 +457,7 @@ static bool overlayPart(int id);
 static void refreshView() {
     glm::vec3 eye, focus;
     cameraRenderFrame(eye, focus);
-    gView = glm::lookAt(eye, focus, glm::vec3(0.0f, 1.0f, 0.0f));
+    gView = glm::lookAt(eye, focus, cameraViewUp());
     gViewInv = glm::inverse(gView);
 }
 

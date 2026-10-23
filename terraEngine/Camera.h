@@ -23,6 +23,7 @@ void cameraRenderFrame(glm::vec3& eye, glm::vec3& focus);
 glm::vec3 cameraPosition();
 glm::vec3 cameraLookDirection();
 glm::vec3 cameraViewDirection();
+glm::vec3 cameraViewUp();
 glm::vec3 cameraVelocity();
 glm::vec3 cameraBobOffset();
 float cameraFov();

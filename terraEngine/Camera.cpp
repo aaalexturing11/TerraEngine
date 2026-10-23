@@ -45,9 +45,13 @@ void cameraOnMouseMove(GLFWwindow*, double xpos, double ypos) {
     double dy = lastY - ypos;
     lastX = xpos;
     lastY = ypos;
-    yaw += dx * 0.1;
     pitch += dy * 0.1;
     pitch = manualClamp((float)pitch, -89.0f, 89.0f);
+    float pole = (std::fabs((float)pitch) - 74.0f) / 15.0f;
+    if (pole < 0.0f) pole = 0.0f;
+    if (pole > 1.0f) pole = 1.0f;
+    float yawScale = 1.0f - pole * pole * (3.0f - 2.0f * pole);
+    yaw += dx * 0.1 * (double)yawScale;
     float ry = glm::radians((float)yaw), rp = glm::radians((float)pitch);
     lookX = std::cos(ry) * std::cos(rp);
     lookY = std::sin(rp);
@@ -395,7 +399,11 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
     float lookPitch = std::cos(stepPhase * 2.0f) * 0.022f * bobBlend + std::sin(idleTime * 1.12f) * 0.01f * still * calm;
     glm::vec3 targetSway = lookRight * lookYaw + camUp * lookPitch;
     lookSwaySmoothed += (targetSway - lookSwaySmoothed) * (1.0f - std::exp(-dt * 10.0f));
-    lookSway = lookSwaySmoothed;
+    float pole = (std::fabs((float)pitch) - 60.0f) / 29.0f;
+    if (pole < 0.0f) pole = 0.0f;
+    if (pole > 1.0f) pole = 1.0f;
+    float swayScale = 1.0f - pole * pole * (3.0f - 2.0f * pole);
+    lookSway = lookSwaySmoothed * swayScale;
 
     float targetFov = 60.0f;
     if (flying) targetFov = 66.0f;
@@ -421,6 +429,14 @@ glm::vec3 cameraViewDirection() {
     float len = glm::length(dir);
     if (len < 0.001f) return look;
     return dir / len;
+}
+
+glm::vec3 cameraViewUp() {
+    float ry = glm::radians((float)yaw);
+    float rp = glm::radians((float)pitch);
+    float sp = std::sin(rp);
+    float cp = std::cos(rp);
+    return glm::vec3(-std::cos(ry) * sp, cp, -std::sin(ry) * sp);
 }
 float cameraFov() { return viewFov; }
 

@@ -153,7 +153,7 @@ void renderClouds(const DayNightLighting& light, float time) {
     glm::vec3 eye, focus;
     cameraRenderFrame(eye, focus);
     glm::mat4 proj = glm::perspective(glm::radians(cameraFov()), aspect, 0.12f, 360.0f);
-    glm::mat4 view = glm::lookAt(eye, focus, glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::mat4 view = glm::lookAt(eye, focus, cameraViewUp());
     glm::mat4 invVP = glm::inverse(proj * view);
 
     glx.UseProgram(gProg);
