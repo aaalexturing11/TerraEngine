@@ -619,7 +619,8 @@ void characterSync(float dt, float time, bool motionLocked) {
         gSwing -= dt * gSwingRate;
         if (gSwing < 0.0f) gSwing = 0.0f;
     }
-    gSwingVis = gSwing > 0.0f ? std::sin((1.0f - gSwing) * PI) : 0.0f;
+    float swingT = 1.0f - gSwing;
+    gSwingVis = gSwing > 0.0f ? 0.5f * (1.0f - std::cos(swingT * PI * 2.0f)) : 0.0f;
 
     if (!motionLocked && motion.swimming)
         gSwim += dt * (5.4f + motion.horizontalSpeed * 0.35f);
@@ -707,7 +708,7 @@ void characterSync(float dt, float time, bool motionLocked) {
 
 void characterCueAction(bool mining) {
     gSwing = 1.0f;
-    gSwingRate = mining ? 5.4f : 7.6f;
+    gSwingRate = mining ? 2.6f : 3.6f;
     gMine = mining;
 }
 
