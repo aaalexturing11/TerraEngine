@@ -92,7 +92,12 @@ static glm::vec3 gPendR(0.0f);
 static glm::vec3 gPendL(0.0f);
 static float gPendYaw = 0.0f;
 static bool gClimbClick = false;
+static bool gGrabPress = false;
 static bool gSprint = false;
+static glm::vec3 gLipR(0.0f);
+static glm::vec3 gLipL(0.0f);
+static glm::vec3 gPlantR(0.0f);
+static glm::vec3 gPlantL(0.0f);
 
 static float wrapDegCam(float d) {
     while (d > 180.0f) d -= 360.0f;
@@ -279,25 +284,34 @@ static bool climbClear(int bx, int by, int bz, float top) {
 }
 
 static bool findLedge(float px, float feet, float pz, const glm::vec3& fwd, int skipX, int skipY, int skipZ, glm::vec3& anchor, int& ox, int& oy, int& oz) {
-    const float hands[4] = { 1.15f, 1.40f, 1.65f, 1.90f };
-    const float reach[2] = { 0.42f, 0.68f };
+    glm::vec3 side(-fwd.z, 0.0f, fwd.x);
+    const float hands[] = { 1.05f, 1.40f, 1.75f, 2.10f, 2.45f, 2.80f, 3.05f };
+    const float reach[] = { 0.40f, 0.72f, 1.05f };
+    const float lateral[] = { 0.0f, -0.42f, 0.42f };
     for (float hand : hands) {
         for (float r : reach) {
-            int bx, by, bz;
-            float top = 0.0f;
-            if (!lipCell(px + fwd.x * r, feet + hand, pz + fwd.z * r, bx, by, bz, top)) continue;
-            if (bx == skipX && by == skipY && bz == skipZ) continue;
-            HangSpot hang;
-            if (!hangAnchor(bx, by, bz, top, px, pz, hang)) continue;
-            float dx = hang.feet.x - px, dy = hang.feet.y - feet, dz = hang.feet.z - pz;
-            if (dx * dx + dy * dy + dz * dz > 1.35f) continue;
-            glm::vec3 to((float)bx + 0.5f - px, 0.0f, (float)bz + 0.5f - pz);
-            float tl = std::sqrt(to.x * to.x + to.z * to.z);
-            if (tl > 0.001f && (to.x * fwd.x + to.z * fwd.z) / tl < 0.12f) continue;
-            anchor = hang.feet;
-            ox = bx; oy = by; oz = bz;
-            commitHang(hang);
-            return true;
+            for (float lat : lateral) {
+                int bx, by, bz;
+                float top = 0.0f;
+                float sx = px + fwd.x * r + side.x * lat;
+                float sz = pz + fwd.z * r + side.z * lat;
+                if (!lipCell(sx, feet + hand, sz, bx, by, bz, top)) continue;
+                if (bx == skipX && by == skipY && bz == skipZ) continue;
+                float rise = top - feet;
+                if (rise < 0.90f || rise > 3.05f) continue;
+                float hdx = (float)bx + 0.5f - px;
+                float hdz = (float)bz + 0.5f - pz;
+                if (hdx * hdx + hdz * hdz > 2.56f) continue;
+                HangSpot hang;
+                if (!hangAnchor(bx, by, bz, top, px, pz, hang)) continue;
+                glm::vec3 to(hdx, 0.0f, hdz);
+                float tl = std::sqrt(hdx * hdx + hdz * hdz);
+                if (tl > 0.001f && (to.x * fwd.x + to.z * fwd.z) / tl < 0.05f) continue;
+                anchor = hang.feet;
+                ox = bx; oy = by; oz = bz;
+                commitHang(hang);
+                return true;
+            }
         }
     }
     return false;
@@ -346,6 +360,78 @@ static bool easeToward(float& x, float& feet, float& z, const glm::vec3& target,
         x = nx; feet = ny; z = nz;
     }
     return false;
+}
+
+static float climbEase(float t) {
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    return t * t * (3.0f - 2.0f * t);
+}
+
+static glm::vec3 climbFeetAt(float u, const glm::vec3& hang, const glm::vec3& stand) {
+    glm::vec3 fwd = stand - hang;
+    fwd.y = 0.0f;
+    float fl = std::sqrt(fwd.x * fwd.x + fwd.z * fwd.z);
+    if (fl > 0.001f) { fwd.x /= fl; fwd.z /= fl; }
+    float top = stand.y;
+    glm::vec3 pull = hang + fwd * 0.10f;
+    pull.y = hang.y + 0.16f;
+    glm::vec3 chest = glm::mix(hang, stand, 0.28f);
+    chest.y = top - 1.22f;
+    glm::vec3 hip = glm::mix(hang, stand, 0.70f);
+    hip.y = top - 0.42f;
+    const glm::vec3 keys[5] = { hang, pull, chest, hip, stand };
+    const float times[5] = { 0.0f, 0.18f, 0.40f, 0.72f, 1.0f };
+    if (u <= 0.0f) return hang;
+    if (u >= 1.0f) return stand;
+    for (int i = 0; i < 4; ++i) {
+        if (u <= times[i + 1]) {
+            float t = (u - times[i]) / (times[i + 1] - times[i]);
+            return glm::mix(keys[i], keys[i + 1], climbEase(t));
+        }
+    }
+    return stand;
+}
+
+static bool climbMove(float& x, float& feet, float& z, const glm::vec3& hang, const glm::vec3& stand, float u0, float u1) {
+    glm::vec3 a = climbFeetAt(u0, hang, stand);
+    glm::vec3 b = climbFeetAt(u1, hang, stand);
+    const int n = 4;
+    for (int i = 1; i <= n; ++i) {
+        float t = (float)i / (float)n;
+        float nx = glm::mix(a.x, b.x, t);
+        float ny = glm::mix(a.y, b.y, t);
+        float nz = glm::mix(a.z, b.z, t);
+        if (hitsSolid(nx, ny, nz)) return false;
+        x = nx; feet = ny; z = nz;
+    }
+    return true;
+}
+
+static void beginClimbHands(float top) {
+    gLipR = gGripR;
+    gLipL = gGripL;
+    float ry = glm::radians(gLedgeYaw);
+    glm::vec3 face(std::cos(ry), 0.0f, std::sin(ry));
+    glm::vec3 right(-face.z, 0.0f, face.x);
+    glm::vec3 mid = (gLipR + gLipL) * 0.5f;
+    mid.y = top;
+    auto plant = [&](float side) {
+        glm::vec3 p = mid + face * 0.28f + right * side;
+        p.y = top + 0.03f;
+        p.x = manualClamp(p.x, (float)gLedgeX + 0.14f, (float)gLedgeX + 0.86f);
+        p.z = manualClamp(p.z, (float)gLedgeZ + 0.14f, (float)gLedgeZ + 0.86f);
+        return p;
+    };
+    gPlantR = plant(0.16f);
+    gPlantL = plant(-0.16f);
+}
+
+static void poseClimbHands(float u) {
+    float right = climbEase((u - 0.36f) / 0.16f);
+    float left = climbEase((u - 0.54f) / 0.16f);
+    gGripR = glm::mix(gLipR, gPlantR, right);
+    gGripL = glm::mix(gLipL, gPlantL, left);
 }
 
 static bool arcMove(float& x, float& feet, float& z, const glm::vec3& from, const glm::vec3& to, float u0, float u1, float arc) {
@@ -432,7 +518,20 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
 
     if (spaceEdge && !onLedge) {
         double now = glfwGetTime();
-        if (now - lastSpaceTap < 0.28) {
+        bool canGrab = !flying && !wet && !grounded && gAct == Act::None && gLedgeLock <= 0.0f
+            && bodyVy < 12.0f && bodyVy > -36.0f;
+        glm::vec3 anchor;
+        int lx = 0, ly = 0, lz = 0;
+        bool grabbed = canGrab && findLedge((float)camX, feetNow, (float)camZ, flat, -9999, -9999, -9999, anchor, lx, ly, lz);
+        if (grabbed) {
+            gAct = Act::Hang;
+            gHang = anchor;
+            gLedgeX = lx; gLedgeY = ly; gLedgeZ = lz;
+            gGrabPress = true;
+            bodyVx = bodyVy = bodyVz = 0.0f;
+            grounded = false;
+        }
+        else if (now - lastSpaceTap < 0.28) {
             flying = !flying;
             bodyVy = 0.0f;
             wet = false;
@@ -521,10 +620,34 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
         camY = (double)feet + (double)gEyeH;
     };
 
-    if (gAct == Act::Climb || gAct == Act::Leap) {
-        gClimbIgnore = gAct == Act::Climb;
-        float dur = gAct == Act::Climb ? 0.70f : 0.40f;
-        float arc = gAct == Act::Climb ? 0.78f : 0.48f;
+    if (gAct == Act::Climb) {
+        gClimbIgnore = true;
+        const float dur = 1.15f;
+        float prev = gActT;
+        gActT += dt / dur;
+        if (gActT > 1.0f) gActT = 1.0f;
+        poseClimbHands(gActT);
+        if (!climbMove(px, feet, pz, gLeapFrom, gLeapTo, prev, gActT)) {
+            gAct = Act::None;
+            gLedgeLock = 0.28f;
+            bodyVy = 1.2f;
+            grounded = false;
+        }
+        else if (gActT >= 1.0f) {
+            px = gLeapTo.x; feet = gLeapTo.y; pz = gLeapTo.z;
+            grounded = true;
+            bodyVy = 0.0f;
+            airTime = 0.0f;
+            gAct = Act::None;
+            gLedgeLock = 0.35f;
+        }
+        else grounded = false;
+        gClimbIgnore = false;
+        place();
+    }
+    else if (gAct == Act::Leap) {
+        const float dur = 0.40f;
+        const float arc = 0.48f;
         float prev = gActT;
         gActT += dt / dur;
         if (gActT > 1.0f) gActT = 1.0f;
@@ -536,25 +659,15 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
         }
         else if (gActT >= 1.0f) {
             px = gLeapTo.x; feet = gLeapTo.y; pz = gLeapTo.z;
-            if (gAct == Act::Climb) {
-                grounded = true;
-                bodyVy = 0.0f;
-                airTime = 0.0f;
-                gAct = Act::None;
-                gLedgeLock = 0.35f;
-            }
-            else {
-                gHang = gLeapTo;
-                gGripR = gPendR;
-                gGripL = gPendL;
-                gLedgeYaw = gPendYaw;
-                gAct = Act::Hang;
-                grounded = false;
-                bodyVx = bodyVy = bodyVz = 0.0f;
-            }
+            gHang = gLeapTo;
+            gGripR = gPendR;
+            gGripL = gPendL;
+            gLedgeYaw = gPendYaw;
+            gAct = Act::Hang;
+            grounded = false;
+            bodyVx = bodyVy = bodyVz = 0.0f;
         }
         else grounded = false;
-        gClimbIgnore = false;
         place();
     }
     else if (gAct == Act::Hang) {
@@ -582,7 +695,7 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
             gLedgeLock = 0.45f;
             grounded = false;
         }
-        else if (spaceEdge || gClimbClick) {
+        else if ((spaceEdge && !gGrabPress) || gClimbClick) {
             glm::vec3 toBlock((float)gLedgeX + 0.5f - px, 0.0f, (float)gLedgeZ + 0.5f - pz);
             float tl = std::sqrt(toBlock.x * toBlock.x + toBlock.z * toBlock.z);
             float into = tl > 0.001f ? (toBlock.x * flat.x + toBlock.z * flat.z) / tl : 1.0f;
@@ -590,13 +703,15 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
             bool canClimb = climbClear(gLedgeX, gLedgeY, gLedgeZ, top);
             HangSpot nextHang;
             bool other = into < 0.55f && findLedgeAhead(px, feet, pz, flat, gLedgeX, gLedgeY, gLedgeZ, nextHang);
-            if ((gClimbClick || into >= 0.55f) && canClimb) {
+            bool wantClimb = canClimb && (gClimbClick || (spaceEdge && w));
+            if (wantClimb) {
                 gLeapFrom = glm::vec3(px, feet, pz);
                 gLeapTo = glm::vec3((float)gLedgeX + 0.5f, top, (float)gLedgeZ + 0.5f);
+                beginClimbHands(top);
                 gAct = Act::Climb;
                 gActT = 0.0f;
             }
-            else if (spaceEdge && other) {
+            else if (spaceEdge && !w && other) {
                 gLeapFrom = glm::vec3(px, feet, pz);
                 gLeapTo = nextHang.feet;
                 gPendR = nextHang.gripR;
@@ -605,23 +720,6 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
                 gLedgeX = nextHang.bx; gLedgeY = nextHang.by; gLedgeZ = nextHang.bz;
                 gAct = Act::Leap;
                 gActT = 0.0f;
-            }
-            else if (spaceEdge && canClimb) {
-                gLeapFrom = glm::vec3(px, feet, pz);
-                gLeapTo = glm::vec3((float)gLedgeX + 0.5f, top, (float)gLedgeZ + 0.5f);
-                gAct = Act::Climb;
-                gActT = 0.0f;
-            }
-            else if (spaceEdge) {
-                glm::vec3 away = -toBlock;
-                float al = std::sqrt(away.x * away.x + away.z * away.z);
-                if (al > 0.001f) { away.x /= al; away.z /= al; }
-                bodyVx = away.x * 2.4f;
-                bodyVz = away.z * 2.4f;
-                bodyVy = 4.0f;
-                gAct = Act::None;
-                gLedgeLock = 0.3f;
-                grounded = false;
             }
         }
         else {
@@ -892,24 +990,13 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
     if (!wet) gSub = 0.0f;
     gLedgeLock -= dt;
     if (gLedgeLock < 0.0f) gLedgeLock = 0.0f;
-    if (gAct == Act::None && !flying && !wet && !grounded && gLedgeLock <= 0.0f && bodyVy < 2.4f && bodyVy > -12.0f) {
-        glm::vec3 anchor;
-        int lx, ly, lz;
-        if (findLedge(px, feet, pz, flat, -9999, -9999, -9999, anchor, lx, ly, lz)) {
-            gAct = Act::Hang;
-            gHang = anchor;
-            gLedgeX = lx; gLedgeY = ly; gLedgeZ = lz;
-            easeToward(px, feet, pz, anchor, dt, 6.5f);
-            bodyVx = bodyVy = bodyVz = 0.0f;
-            grounded = false;
-        }
-    }
     if (gAct != Act::Roll && gAct != Act::Slide) gViewRoll *= std::exp(-dt * 8.0f);
     if (gAct == Act::Slide) {
         float tilt = 0.055f;
         gViewRoll += (tilt - gViewRoll) * (1.0f - std::exp(-dt * 6.0f));
     }
     gClimbClick = false;
+    gGrabPress = false;
     clampLedgeLook();
     gImpact *= std::exp(-dt * 3.0f);
     camY = (double)feet + (double)gEyeH;

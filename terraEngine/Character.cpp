@@ -1062,8 +1062,10 @@ void characterSync(float dt, float time, bool motionLocked) {
     }
     else if (mode == MoveMode::LedgeClimb) {
         float t = motion.action;
-        legR = glm::mix(0.2f, -0.35f, t);
-        legL = glm::mix(0.05f, 0.25f, t);
+        float tuck = glm::smoothstep(0.16f, 0.48f, t);
+        float rise = glm::smoothstep(0.70f, 1.0f, t);
+        legR = glm::mix(glm::mix(0.14f, 0.82f, tuck), 0.04f, rise);
+        legL = glm::mix(glm::mix(0.08f, 0.70f, tuck), 0.0f, rise);
     }
     else if (ledge) {
         legR = 0.12f + std::sin(time * 1.7f) * 0.07f;
@@ -1077,7 +1079,7 @@ void characterSync(float dt, float time, bool motionLocked) {
     float pinTarget = 0.0f;
     if (motion.gripping && mode == MoveMode::LedgeHang) pinTarget = 1.0f;
     else if (motion.gripping && mode == MoveMode::LedgeClimb)
-        pinTarget = 1.0f - glm::smoothstep(0.28f, 0.58f, motion.action);
+        pinTarget = 1.0f - glm::smoothstep(0.86f, 1.0f, motion.action);
     if (pinTarget > gPin) gPin = pinTarget;
     else gPin = damp(gPin, pinTarget, dt, 7.0f);
     gSquat = damp(gSquat, (!inWater && !ledge && mode != MoveMode::Slide && mode != MoveMode::Roll) ? motion.crouch : 0.0f, dt, 8.0f);
@@ -1088,7 +1090,11 @@ void characterSync(float dt, float time, bool motionLocked) {
     else if (mode == MoveMode::Underwater) wantTilt = manualClamp(-glm::radians((float)pitch), -0.65f, 1.12f);
     else if (mode == MoveMode::Slide) wantTilt = -1.05f;
     else if (mode == MoveMode::Roll) wantTilt = std::sin(motion.action * PI) * 1.15f;
-    else if (mode == MoveMode::LedgeClimb) wantTilt = glm::mix(0.0f, -0.2f, motion.action);
+    else if (mode == MoveMode::LedgeClimb) {
+        float pull = glm::smoothstep(0.08f, 0.40f, motion.action);
+        float up = glm::smoothstep(0.74f, 1.0f, motion.action);
+        wantTilt = glm::mix(0.34f * pull, 0.0f, up);
+    }
     else if (gSquat > 0.02f) wantTilt = 0.46f * gSquat;
     gTilt = damp(gTilt, wantTilt, dt, (mode == MoveMode::Roll || mode == MoveMode::Slide || gSquat > 0.02f) ? 9.0f : 4.2f);
     float wantDrop = 0.22f * gSquat;
