@@ -1,6 +1,6 @@
 name=Test agua
 seed=3193103124
-sx=213
+sx=198
 sy=53
-sz=12
-day=12381.858
+sz=24
+day=12471.209
