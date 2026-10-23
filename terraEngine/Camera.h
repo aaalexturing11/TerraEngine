@@ -33,7 +33,8 @@ enum class MoveMode {
     Idle, Walk, Run, Jump, Fall,
     Crouch, Slide, Land, Roll,
     Float, Swim, Underwater,
-    LedgeHang, LedgeClimb, LedgeJump
+    LedgeHang, LedgeClimb, LedgeJump,
+    Vault
 };
 
 struct PlayerMotion {
@@ -56,6 +57,7 @@ struct PlayerMotion {
     float ledgeYaw = 0.0f;
     glm::vec3 gripR{ 0.0f };
     glm::vec3 gripL{ 0.0f };
+    int vaultHand = 0;
 };
 
 float cameraEyeHeight();
