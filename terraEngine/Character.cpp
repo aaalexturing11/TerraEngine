@@ -538,31 +538,36 @@ static glm::mat4 bodyRightArm() {
 
 static glm::mat4 heldMatrixAt(const glm::mat4& armWorld, Block block, glm::vec3& flame) {
     float len = 12.0f * kScale;
-    glm::vec3 grip = glm::vec3(armWorld * glm::vec4(0.0f, -len, 0.08f, 1.0f));
-    glm::vec3 downArm = glm::normalize(glm::vec3(armWorld * glm::vec4(0.0f, -1.0f, 0.0f, 0.0f)));
-    glm::vec3 side = glm::normalize(glm::vec3(armWorld * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)));
-    glm::vec3 out = glm::normalize(glm::cross(side, downArm));
-    glm::mat4 m(1.0f);
+    glm::vec3 grip = glm::vec3(armWorld * glm::vec4(0.02f, -len + 0.01f, 0.03f, 1.0f));
+    glm::vec3 fwd = glm::vec3(playerRoot()[2]);
+    fwd.y = 0.0f;
+    if (glm::dot(fwd, fwd) < 0.0001f) fwd = glm::vec3(0.0f, 0.0f, -1.0f);
+    fwd = glm::normalize(fwd);
+    glm::vec3 up(0.0f, 1.0f, 0.0f);
+    glm::vec3 right = glm::normalize(glm::cross(up, fwd));
     if (block == Block::Torch) {
-        glm::vec3 up = glm::normalize(glm::vec3(0.0f, 1.0f, 0.0f) + out * 0.35f);
-        glm::vec3 right = glm::normalize(glm::cross(up, out));
-        glm::vec3 fwd = glm::normalize(glm::cross(right, up));
-        m[0] = glm::vec4(right, 0.0f);
-        m[1] = glm::vec4(up, 0.0f);
-        m[2] = glm::vec4(fwd, 0.0f);
-        m[3] = glm::vec4(grip + out * 0.05f, 1.0f);
-        flame = glm::vec3(m * glm::vec4(0.0f, 0.56f, 0.0f, 1.0f));
+        float s = 0.42f;
+        glm::vec3 dir = glm::normalize(up * 0.82f + fwd * 0.50f + right * 0.12f);
+        glm::vec3 side = glm::normalize(glm::cross(dir, fwd));
+        glm::vec3 bin = glm::normalize(glm::cross(side, dir));
+        glm::mat4 m(1.0f);
+        m[0] = glm::vec4(side * s, 0.0f);
+        m[1] = glm::vec4(dir * s, 0.0f);
+        m[2] = glm::vec4(bin * s, 0.0f);
+        m[3] = glm::vec4(grip, 1.0f);
+        flame = grip + dir * (10.0f / 16.0f * s);
+        return m;
     }
-    else {
-        float size = isPlant(block) ? 0.50f : 0.32f;
-        glm::vec3 up(0.0f, 1.0f, 0.0f);
-        glm::vec3 right = glm::normalize(glm::cross(up, out));
-        m[0] = glm::vec4(right * size, 0.0f);
-        m[1] = glm::vec4(up * size, 0.0f);
-        m[2] = glm::vec4(out * size, 0.0f);
-        m[3] = glm::vec4(grip + out * 0.08f + up * 0.02f, 1.0f);
-        flame = grip;
-    }
+    float size = isPlant(block) ? 0.30f : 0.20f;
+    float yaw = glm::radians(isPlant(block) ? 0.0f : 38.0f);
+    glm::vec3 face = glm::normalize(fwd * std::cos(yaw) + right * std::sin(yaw));
+    glm::vec3 side = glm::normalize(glm::cross(up, face));
+    glm::mat4 m(1.0f);
+    m[0] = glm::vec4(side * size, 0.0f);
+    m[1] = glm::vec4(up * size, 0.0f);
+    m[2] = glm::vec4(face * size, 0.0f);
+    m[3] = glm::vec4(grip + fwd * (size * 0.35f), 1.0f);
+    flame = grip;
     return m;
 }
 
