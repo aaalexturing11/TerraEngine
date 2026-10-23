@@ -1,6 +1,7 @@
 #include "BlockSelection.h"
 #include "Camera.h"
 #include "Character.h"
+#include "Inventory.h"
 #include "PauseMenu.h"
 #include "World.h"
 
@@ -219,62 +220,47 @@ void updateSelectedBlock(GLFWwindow* window) {
 static bool gInventory = false;
 
 bool inventoryOpen() { return gInventory; }
-void setInventoryOpen(bool open) { gInventory = open; }
-
-static Block kSlots[10] = {
-    Block::Grass, Block::Water, Block::Torch, Block::Lava, Block::Dirt,
-    Block::Log, Block::Leaves, Block::TallGrass, Block::Poppy, Block::Triteleia
-};
-static int gSlot = 0;
+void setInventoryOpen(bool open) {
+    if (gInventory && !open) inventoryCancelGesture();
+    gInventory = open;
+}
 
 Block placeSlotBlock(int slot) {
-    if (slot < 0 || slot > 9) return Block::Grass;
-    return kSlots[slot];
+    if (slot < 0 || slot >= kHotbarSlots) return Block::Air;
+    return inventorySlot(slot);
 }
 
 const char* placeSlotName(int slot) {
-    switch (placeSlotBlock(slot)) {
-    case Block::Water: return "Agua";
-    case Block::Torch: return "Antorcha";
-    case Block::Lava: return "Lava";
-    case Block::Dirt: return "Tierra";
-    case Block::Log: return "Tronco";
-    case Block::Leaves: return "Hojas";
-    case Block::TallGrass: return "Pasto";
-    case Block::Poppy: return "Amapola";
-    case Block::Triteleia: return "Flor";
-    case Block::TriteleiaRed: return "Flor rosa";
-    case Block::Stone: return "Piedra";
-    case Block::Obsidian: return "Obsidiana";
-    default: return "Pasto";
-    }
+    return inventoryBlockName(placeSlotBlock(slot));
 }
 
 void selectPlaceSlot(int slot) {
-    if (slot < 0) slot = 0;
-    if (slot > 9) slot = 9;
-    gSlot = slot;
+    inventorySelect(slot);
 }
 
 void setHotbarBlock(int slot, Block block) {
-    if (slot < 0 || slot > 9) return;
-    kSlots[slot] = block;
-    gSlot = slot;
+    if (slot < 0 || slot >= kHotbarSlots) return;
+    inventorySetSlot(slot, block);
+    inventorySelect(slot);
 }
 
-int selectedPlaceSlot() { return gSlot; }
+int selectedPlaceSlot() { return inventorySelected(); }
 
 void pollPlaceHotkeys(GLFWwindow* window) {
-    const int keys[10] = {
+    static bool wasDown[kHotbarSlots] = {};
+    const int keys[kHotbarSlots] = {
         GLFW_KEY_1, GLFW_KEY_2, GLFW_KEY_3, GLFW_KEY_4, GLFW_KEY_5,
-        GLFW_KEY_6, GLFW_KEY_7, GLFW_KEY_8, GLFW_KEY_9, GLFW_KEY_0
+        GLFW_KEY_6, GLFW_KEY_7, GLFW_KEY_8, GLFW_KEY_9
     };
-    for (int i = 0; i < 10; ++i)
-        if (glfwGetKey(window, keys[i]) == GLFW_PRESS) gSlot = i;
+    for (int i = 0; i < kHotbarSlots; ++i) {
+        bool down = glfwGetKey(window, keys[i]) == GLFW_PRESS;
+        if (down && !wasDown[i]) inventorySelect(i);
+        wasDown[i] = down;
+    }
 }
 
 const char* selectedPlaceName() {
-    return placeSlotName(gSlot);
+    return inventoryBlockName(inventorySlot(inventorySelected()));
 }
 
 void handleMouseClick(GLFWwindow*, int button, int action, int) {
@@ -288,7 +274,8 @@ void handleMouseClick(GLFWwindow*, int button, int action, int) {
     }
     else {
         Block hit = blockAt(selectedBlock.x, selectedBlock.y, selectedBlock.z);
-        Block gPlace = placeSlotBlock(gSlot);
+        Block gPlace = placeSlotBlock(selectedPlaceSlot());
+        if (gPlace == Block::Air) return;
         if (gPlace == Block::Torch && hit != Block::Water) {
             glm::ivec3 p = selectedBlock + hitNormal;
             int meta = 0;

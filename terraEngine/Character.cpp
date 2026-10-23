@@ -5,6 +5,7 @@
 #include "BlockSelection.h"
 #include "BlockShader.h"
 #include "Camera.h"
+#include "Inventory.h"
 #include "Config.h"
 #include "MathUtil.h"
 #include "Renderer.h"
@@ -101,6 +102,11 @@ static float gSwing = 0.0f;
 static float gSwingRate = 5.0f;
 static float gSwingVis = 0.0f;
 static bool gMine = true;
+static float gItemGrowMain = 1.0f;
+static float gItemGrowOff = 1.0f;
+static Block gSeenMain = Block::Air;
+static Block gSeenOff = Block::Air;
+static bool gHandsPrimed = false;
 static float gLand = 0.0f;
 static float gGlow = 0.0f;
 static glm::vec3 gLightPos(0.0f);
@@ -547,9 +553,10 @@ static glm::mat4 bodyRightArm() {
     return limbMatrix(glm::vec3(-arm, 24.0f, 0.0f), swing, -0.12f, false);
 }
 
-static glm::mat4 heldMatrixAt(const glm::mat4& armWorld, Block block, glm::vec3& flame) {
+static glm::mat4 heldMatrixAt(const glm::mat4& armWorld, Block block, glm::vec3& flame, bool left) {
+    float side = left ? -1.0f : 1.0f;
     float len = 12.0f * kScale;
-    glm::vec3 grip = glm::vec3(armWorld * glm::vec4(0.02f, -len + 0.01f, 0.03f, 1.0f));
+    glm::vec3 grip = glm::vec3(armWorld * glm::vec4(0.02f * side, -len + 0.01f, 0.03f, 1.0f));
     glm::vec3 fwd = glm::vec3(playerRoot()[2]);
     fwd.y = 0.0f;
     if (glm::dot(fwd, fwd) < 0.0001f) fwd = glm::vec3(0.0f, 0.0f, -1.0f);
@@ -558,11 +565,11 @@ static glm::mat4 heldMatrixAt(const glm::mat4& armWorld, Block block, glm::vec3&
     glm::vec3 right = glm::normalize(glm::cross(up, fwd));
     if (block == Block::Torch) {
         float s = 0.42f;
-        glm::vec3 dir = glm::normalize(up * 0.82f + fwd * 0.50f + right * 0.12f);
-        glm::vec3 side = glm::normalize(glm::cross(dir, fwd));
-        glm::vec3 bin = glm::normalize(glm::cross(side, dir));
+        glm::vec3 dir = glm::normalize(up * 0.82f + fwd * 0.50f + right * (0.12f * side));
+        glm::vec3 axis = glm::normalize(glm::cross(dir, fwd));
+        glm::vec3 bin = glm::normalize(glm::cross(axis, dir));
         glm::mat4 m(1.0f);
-        m[0] = glm::vec4(side * s, 0.0f);
+        m[0] = glm::vec4(axis * s, 0.0f);
         m[1] = glm::vec4(dir * s, 0.0f);
         m[2] = glm::vec4(bin * s, 0.0f);
         m[3] = glm::vec4(grip, 1.0f);
@@ -570,11 +577,11 @@ static glm::mat4 heldMatrixAt(const glm::mat4& armWorld, Block block, glm::vec3&
         return m;
     }
     float size = isPlant(block) ? 0.30f : 0.20f;
-    float yaw = glm::radians(isPlant(block) ? 0.0f : 38.0f);
+    float yaw = glm::radians((isPlant(block) ? 0.0f : 38.0f) * side);
     glm::vec3 face = glm::normalize(fwd * std::cos(yaw) + right * std::sin(yaw));
-    glm::vec3 side = glm::normalize(glm::cross(up, face));
+    glm::vec3 faceSide = glm::normalize(glm::cross(up, face));
     glm::mat4 m(1.0f);
-    m[0] = glm::vec4(side * size, 0.0f);
+    m[0] = glm::vec4(faceSide * size, 0.0f);
     m[1] = glm::vec4(up * size, 0.0f);
     m[2] = glm::vec4(face * size, 0.0f);
     m[3] = glm::vec4(grip + fwd * (size * 0.35f), 1.0f);
@@ -582,12 +589,50 @@ static glm::mat4 heldMatrixAt(const glm::mat4& armWorld, Block block, glm::vec3&
     return m;
 }
 
-static HandFrame makeHandFrame() {
-    refreshView();
-    HandFrame frame;
-    frame.arm = bodyRightArm();
-    frame.item = heldMatrixAt(frame.arm, placeSlotBlock(selectedPlaceSlot()), frame.flame);
-    return frame;
+static glm::mat4 leftArmMatrix() {
+    float arm = (gStyle == SkinArmStyle::Slim) ? 5.5f : 6.0f;
+    bool raised = cameraFirstPerson() && !lookingDown();
+    if (!raised) {
+        float out = 0.10f + std::sin(gTime * 1.3f) * 0.02f * (1.0f - gWalk);
+        return limbMatrix(glm::vec3(arm, 24.0f, 0.0f), gPose.armL, out, gLegacy);
+    }
+    float swing = 1.05f + gPose.armL * 0.22f;
+    return limbMatrix(glm::vec3(arm, 24.0f, 0.0f), swing, 0.12f, gLegacy);
+}
+
+static glm::mat4 slideItem(const glm::mat4& from, const glm::mat4& to, float k) {
+    glm::mat4 m = to;
+    m[3] = glm::mix(from[3], to[3], k);
+    return m;
+}
+
+static float swapBlend() {
+    float s = inventorySwapAmount();
+    float e = s * s * (3.0f - 2.0f * s);
+    return 1.0f - e;
+}
+
+static glm::vec3 torchTip(const glm::mat4& m) {
+    glm::vec3 dir = glm::vec3(m[1]);
+    float len = glm::length(dir);
+    if (len < 0.0001f) return glm::vec3(m[3]);
+    return glm::vec3(m[3]) + dir * ((10.0f / 16.0f * 0.42f) / len);
+}
+
+static glm::mat4 shownItem(const glm::mat4& rightArm, const glm::mat4& leftArm, Block block, bool mainHand) {
+    glm::vec3 flame;
+    glm::mat4 atRight = heldMatrixAt(rightArm, block, flame, false);
+    glm::mat4 atLeft = heldMatrixAt(leftArm, block, flame, true);
+    float k = swapBlend();
+    return mainHand ? slideItem(atLeft, atRight, k) : slideItem(atRight, atLeft, k);
+}
+
+static glm::mat4 scaleGrip(const glm::mat4& m, float s) {
+    glm::mat4 o = m;
+    o[0] *= s;
+    o[1] *= s;
+    o[2] *= s;
+    return o;
 }
 
 static HeldDraw heldFor(Block block) {
@@ -766,11 +811,34 @@ void characterSync(float dt, float time, bool motionLocked) {
     gPose.legR = damp(gPose.legR, legR, dt, legDamp);
     gPose.legL = damp(gPose.legL, legL, dt, legDamp);
 
-    bool torch = placeSlotBlock(selectedPlaceSlot()) == Block::Torch;
-    float targetGlow = (!motionLocked && torch) ? 1.0f : (torch ? 1.0f : 0.0f);
-    gGlow = damp(gGlow, targetGlow, dt, 8.0f);
-    HandFrame hand = makeHandFrame();
-    if (torch) gLightPos = hand.flame;
+    Block mainItem = placeSlotBlock(selectedPlaceSlot());
+    Block offItem = inventoryOffhand();
+    bool mainTorch = mainItem == Block::Torch;
+    bool offTorch = offItem == Block::Torch;
+    gGlow = damp(gGlow, (mainTorch || offTorch) ? 1.0f : 0.0f, dt, 8.0f);
+    if (mainTorch || offTorch) {
+        glm::mat4 rightArm = bodyRightArm();
+        glm::mat4 leftArm = leftArmMatrix();
+        glm::mat4 shown = shownItem(rightArm, leftArm, mainTorch ? mainItem : offItem, mainTorch);
+        gLightPos = torchTip(shown);
+    }
+    if (!gHandsPrimed) {
+        gSeenMain = mainItem;
+        gSeenOff = offItem;
+        gHandsPrimed = true;
+    }
+    else {
+        if (mainItem != gSeenMain) {
+            if (inventorySwapAmount() < 0.08f && mainItem != Block::Air) gItemGrowMain = 0.0f;
+            gSeenMain = mainItem;
+        }
+        if (offItem != gSeenOff) {
+            if (inventorySwapAmount() < 0.08f && offItem != Block::Air) gItemGrowOff = 0.0f;
+            gSeenOff = offItem;
+        }
+    }
+    gItemGrowMain = damp(gItemGrowMain, 1.0f, dt, 14.0f);
+    gItemGrowOff = damp(gItemGrowOff, 1.0f, dt, 14.0f);
     float flick = 0.94f + 0.06f * std::sin(time * 11.0f) * std::sin(time * 7.13f);
     if (gGlow < 0.02f) {
         gLightColor = glm::vec3(0.0f);
@@ -949,8 +1017,8 @@ static void drawHeldBatch(unsigned tex, const std::vector<HeldVert>& verts) {
 
 static void loadCamera();
 
-static void drawHeld(const glm::mat4& item, float sky, float lamp, float time) {
-    HeldDraw draw = heldFor(placeSlotBlock(selectedPlaceSlot()));
+static void drawHeld(const glm::mat4& item, Block block, float sky, float lamp, float time) {
+    HeldDraw draw = heldFor(block);
     if (draw.kind == HeldKind::None) return;
     loadCamera();
     std::vector<HeldVert> batch;
@@ -1012,6 +1080,7 @@ static void loadCamera() {
 
 void renderPlayerCharacter(const DayNightLighting& light, float time) {
     if (!gReady) return;
+    if (inventoryHud() == HudMode::Clean) return;
     gTime = time;
     float sky = 0.0f, lamp = 0.0f;
     int ix = (int)std::floor(camX);
@@ -1037,7 +1106,6 @@ void renderPlayerCharacter(const DayNightLighting& light, float time) {
         drawPosed(id, m, mirror, true);
     };
 
-    float out = 0.10f + std::sin(gTime * 1.3f) * 0.02f * (1.0f - gWalk);
     glm::mat4 root = playerRoot();
     bool first = cameraFirstPerson();
     bool showBody = !first || lookingDown();
@@ -1053,11 +1121,11 @@ void renderPlayerCharacter(const DayNightLighting& light, float time) {
         drawBody(PantsR, limbMatrix(glm::vec3(-2, 12, 0), gPose.legR, -gLegSpread, false, gFootYawR), false);
         drawBody(Body, body, false);
         drawBody(Jacket, body, false);
-        float arm = (gStyle == SkinArmStyle::Slim) ? 5.5f : 6.0f;
-        if (gLegacy) drawBody(ArmR, limbMatrix(glm::vec3(arm, 24, 0), gPose.armL, out, true), true);
+        glm::mat4 leftArm = leftArmMatrix();
+        if (gLegacy) drawBody(ArmR, leftArm, true);
         else {
-            drawBody(ArmL, limbMatrix(glm::vec3(arm, 24, 0), gPose.armL, out, false), false);
-            drawBody(SleeveL, limbMatrix(glm::vec3(arm, 24, 0), gPose.armL, out, false), false);
+            drawBody(ArmL, leftArm, false);
+            drawBody(SleeveL, leftArm, false);
         }
     }
     if (!first) {
@@ -1067,14 +1135,29 @@ void renderPlayerCharacter(const DayNightLighting& light, float time) {
         drawBody(Hat, head, false);
     }
 
-    HandFrame hand = makeHandFrame();
-    drawBody(ArmR, hand.arm, false);
-    drawBody(SleeveR, hand.arm, false);
+    glm::mat4 rightArm = bodyRightArm();
+    glm::mat4 leftArm = leftArmMatrix();
+    Block mainItem = placeSlotBlock(selectedPlaceSlot());
+    Block offItem = inventoryOffhand();
+    bool raised = first && !showBody;
+    bool showOffArm = raised && (offItem != Block::Air || inventorySwapAmount() > 0.02f);
+    drawBody(ArmR, rightArm, false);
+    drawBody(SleeveR, rightArm, false);
+    if (showOffArm) {
+        if (gLegacy) drawBody(ArmR, leftArm, true);
+        else {
+            drawBody(ArmL, leftArm, false);
+            drawBody(SleeveL, leftArm, false);
+        }
+    }
     glx.BindVertexArray(0);
 
     bindOpaqueShader(light, time);
     glEnable(GL_DEPTH_TEST);
-    drawHeld(hand.item, sky, lamp, time);
+    if (mainItem != Block::Air)
+        drawHeld(scaleGrip(shownItem(rightArm, leftArm, mainItem, true), gItemGrowMain), mainItem, sky, lamp, time);
+    if (offItem != Block::Air)
+        drawHeld(scaleGrip(shownItem(rightArm, leftArm, offItem, false), gItemGrowOff), offItem, sky, lamp, time);
     glFrontFace(GL_CCW);
     glDisable(GL_POLYGON_OFFSET_FILL);
     if (!cull) glDisable(GL_CULL_FACE);

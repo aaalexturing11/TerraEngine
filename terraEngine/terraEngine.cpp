@@ -15,6 +15,8 @@
 #include "Character.h"
 #include "Clouds.h"
 #include "FluidSolver.h"
+#include "Inventory.h"
+#include "ItemIcon.h"
 #include "Lighting.h"
 #include "PauseMenu.h"
 #include "PostFX.h"
@@ -87,6 +89,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     blockTex.triteleia = loadTexture("textures/blocks/triteleia.png", true, true);
     blockTex.triteleiaRed = loadTexture("textures/blocks/triteleia_recolor.png", true, true);
     setBlockTextures(blockTex);
+    itemIconsBuild();
     initCharacter();
 
     PauseMenuState menuState;
@@ -108,11 +111,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     });
     glfwSetScrollCallback(window, [](GLFWwindow* w, double xoff, double yoff) {
         ImGui_ImplGlfw_ScrollCallback(w, xoff, yoff);
-        if (ImGui::GetIO().WantCaptureMouse) return;
+        if (ImGui::GetIO().WantCaptureMouse && !inventoryOpen()) return;
         if (paused || !gameMenuInWorld()) return;
         int slot = selectedPlaceSlot();
-        if (yoff > 0.0) slot = (slot + 9) % 10;
-        else if (yoff < 0.0) slot = (slot + 1) % 10;
+        if (yoff > 0.0) slot = (slot + kHotbarSlots - 1) % kHotbarSlots;
+        else if (yoff < 0.0) slot = (slot + 1) % kHotbarSlots;
         selectPlaceSlot(slot);
     });
     glfwSetMouseButtonCallback(window, [](GLFWwindow* w, int button, int action, int mods) {
@@ -157,6 +160,16 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         if (inWorld && !paused && f5Down && !f5WasDown)
             cameraCycleView();
         f5WasDown = f5Down;
+        static bool fWasDown = false;
+        bool fDown = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
+        if (inWorld && !paused && fDown && !fWasDown)
+            inventorySwapOffhand();
+        fWasDown = fDown;
+        static bool f1WasDown = false;
+        bool f1Down = glfwGetKey(window, GLFW_KEY_F1) == GLFW_PRESS;
+        if (inWorld && !paused && f1Down && !f1WasDown)
+            inventoryCycleHud();
+        f1WasDown = f1Down;
         bool uiOpen = !inWorld || paused || inventoryOpen();
         cameraSetLookEnabled(inWorld && !uiOpen);
         glfwSetInputMode(window, GLFW_CURSOR, uiOpen ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
@@ -169,8 +182,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
                 nextWorldSave = frameStart + 8.0;
             }
             worldServiceSaves(frameStart);
-            cameraUpdateMovement(window, !uiOpen, (float)(frameStart - lastFrameTime));
-            characterSync((float)(frameStart - lastFrameTime), time, uiOpen);
+            float frameDt = (float)(frameStart - lastFrameTime);
+            inventoryTick(frameDt);
+            cameraUpdateMovement(window, !uiOpen, frameDt);
+            characterSync(frameDt, time, uiOpen);
             generated = worldStreamAround((float)camX, (float)camZ);
             setMeshBudget(1);
             fluidSetHeavy(generated == 0);
@@ -294,101 +309,12 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         if (submerged) god = light.sunIntensity * 0.9f;
         presentScene(width, height, light, sunUv, god, submerged, time);
 
-        drawCrosshair(width, height);
-
-        const float slot = 46.0f;
-        const float gap = 4.0f;
-        const float bar = 10.0f * slot + 9.0f * gap;
-        unsigned icons[10] = {
-            blockTex.grassTop, 0, blockTex.torch, 0, blockTex.dirt,
-            blockTex.logTop, blockTex.leaves, blockTex.tallGrass, blockTex.poppy, blockTex.triteleia
-        };
-        ImGui::SetNextWindowPos(ImVec2(((float)width - bar) * 0.5f - 10.0f, (float)height - slot - 52.0f), ImGuiCond_Always);
-        ImGui::SetNextWindowBgAlpha(0.5f);
-        ImGui::Begin("HUD", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_AlwaysAutoResize);
-        ImGui::Text("%s", selectedPlaceName());
-        int sel = selectedPlaceSlot();
-        for (int i = 0; i < 10; ++i) {
-            if (i) ImGui::SameLine(0.0f, gap);
-            ImGui::PushID(i);
-            ImVec2 p = ImGui::GetCursorScreenPos();
-            if (icons[i]) ImGui::Image((ImTextureID)(intptr_t)icons[i], ImVec2(slot, slot), ImVec2(0, 1), ImVec2(1, 0));
-            else ImGui::ColorButton("##c", i == 1 ? ImVec4(0.12f, 0.38f, 0.75f, 1.0f) : ImVec4(0.95f, 0.32f, 0.05f, 1.0f), ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop, ImVec2(slot, slot));
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            dl->AddRect(p, ImVec2(p.x + slot, p.y + slot), i == sel ? IM_COL32(255, 214, 80, 255) : IM_COL32(12, 12, 12, 230), 2.0f, 0, i == sel ? 3.0f : 1.5f);
-            char key[2] = { (char)(i == 9 ? '0' : '1' + i), 0 };
-            dl->AddText(ImVec2(p.x + 3.0f, p.y + 1.0f), IM_COL32(255, 255, 255, 230), key);
-            ImGui::PopID();
-        }
-        ImGui::End();
-
-        if (inventoryOpen()) {
-            struct Entry { Block block; unsigned tex; ImVec4 color; };
-            Entry items[] = {
-                { Block::Grass, blockTex.grassTop, ImVec4(1, 1, 1, 1) },
-                { Block::Dirt, blockTex.dirt, ImVec4(1, 1, 1, 1) },
-                { Block::Stone, blockTex.stone, ImVec4(1, 1, 1, 1) },
-                { Block::Log, blockTex.logTop, ImVec4(1, 1, 1, 1) },
-                { Block::Leaves, blockTex.leaves, ImVec4(1, 1, 1, 1) },
-                { Block::Water, 0, ImVec4(0.12f, 0.38f, 0.75f, 1) },
-                { Block::Lava, 0, ImVec4(0.95f, 0.32f, 0.05f, 1) },
-                { Block::Obsidian, 0, ImVec4(0.12f, 0.08f, 0.16f, 1) },
-                { Block::Torch, blockTex.torch, ImVec4(1, 1, 1, 1) },
-                { Block::TallGrass, blockTex.tallGrass, ImVec4(1, 1, 1, 1) },
-                { Block::Poppy, blockTex.poppy, ImVec4(1, 1, 1, 1) },
-                { Block::Triteleia, blockTex.triteleia, ImVec4(1, 1, 1, 1) },
-                { Block::TriteleiaRed, blockTex.triteleiaRed, ImVec4(1, 1, 1, 1) }
-            };
-            const int count = (int)(sizeof(items) / sizeof(items[0]));
-            ImGui::SetNextWindowPos(ImVec2(width * 0.5f, height * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::SetNextWindowBgAlpha(0.92f);
-            ImGui::Begin("Inventario", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
-            ImGui::Text("Elige un bloque. E o Esc cierran.");
-            for (int i = 0; i < count; ++i) {
-                if (i % 7 != 0) ImGui::SameLine();
-                ImGui::BeginGroup();
-                ImGui::PushID(i + 100);
-                bool pressed = false;
-                if (items[i].tex) {
-                    pressed = ImGui::ImageButton("##icon", (ImTextureID)(intptr_t)items[i].tex, ImVec2(48, 48), ImVec2(0, 1), ImVec2(1, 0));
-                }
-                else {
-                    pressed = ImGui::ColorButton("##col", items[i].color, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop, ImVec2(48, 48));
-                }
-                if (pressed) {
-                    bool found = false;
-                    for (int s = 0; s < 10; ++s) {
-                        if (placeSlotBlock(s) == items[i].block) {
-                            selectPlaceSlot(s);
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) setHotbarBlock(selectedPlaceSlot(), items[i].block);
-                }
-                const char* name = "Bloque";
-                switch (items[i].block) {
-                case Block::Grass: name = "Pasto"; break;
-                case Block::Dirt: name = "Tierra"; break;
-                case Block::Stone: name = "Piedra"; break;
-                case Block::Log: name = "Tronco"; break;
-                case Block::Leaves: name = "Hojas"; break;
-                case Block::Water: name = "Agua"; break;
-                case Block::Lava: name = "Lava"; break;
-                case Block::Obsidian: name = "Obsidiana"; break;
-                case Block::Torch: name = "Antorcha"; break;
-                case Block::TallGrass: name = "Pasto"; break;
-                case Block::Poppy: name = "Amapola"; break;
-                case Block::Triteleia: name = "Flor"; break;
-                case Block::TriteleiaRed: name = "Flor rosa"; break;
-                default: break;
-                }
-                ImGui::TextUnformatted(name);
-                ImGui::PopID();
-                ImGui::EndGroup();
-            }
-            ImGui::End();
-        }
+        if (inventoryHud() == HudMode::Playing)
+            drawCrosshair(width, height);
+        if (inventoryHud() == HudMode::Playing)
+            inventoryDrawHotbar(width, height, time);
+        if (inventoryOpen())
+            inventoryDrawScreen(width, height, time);
         }
 
         pauseMenuRender(width, height, menuState);

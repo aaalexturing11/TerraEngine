@@ -141,6 +141,8 @@
     <ClInclude Include="GlExt.h" />
     <ClInclude Include="GlIncludes.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="Inventory.h" />
+    <ClInclude Include="ItemIcon.h" />
     <ClInclude Include="Lighting.h" />
     <ClInclude Include="MathUtil.h" />
     <ClInclude Include="terraEngine.h" />
@@ -161,6 +163,8 @@
     <ClCompile Include="Clouds.cpp" />
     <ClCompile Include="FluidSolver.cpp" />
     <ClCompile Include="GlExt.cpp" />
+    <ClCompile Include="Inventory.cpp" />
+    <ClCompile Include="ItemIcon.cpp" />
     <ClCompile Include="Lighting.cpp" />
     <ClCompile Include="terraEngine.cpp" />
     <ClCompile Include="PauseMenu.cpp" />

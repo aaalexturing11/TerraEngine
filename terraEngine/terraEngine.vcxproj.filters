@@ -54,6 +54,12 @@
     <ClInclude Include="Character.h">
       <Filter>Game</Filter>
     </ClInclude>
+    <ClInclude Include="Inventory.h">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="ItemIcon.h">
+      <Filter>Game</Filter>
+    </ClInclude>
     <ClInclude Include="BlockSelection.h">
       <Filter>Game</Filter>
     </ClInclude>
@@ -87,6 +93,12 @@
       <Filter>Game</Filter>
     </ClCompile>
     <ClCompile Include="FluidSolver.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="Inventory.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="ItemIcon.cpp">
       <Filter>Game</Filter>
     </ClCompile>
     <ClCompile Include="BlockSelection.cpp">
