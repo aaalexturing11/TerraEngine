@@ -1049,15 +1049,33 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
     viewFov += (targetFov - viewFov) * (1.0f - std::exp(-dt * 6.0f));
 
     float spdNow = std::sqrt(bodyVx * bodyVx + bodyVz * bodyVz);
+    static bool gDeepWater = false;
+    static float gWaterDepth = 0.0f;
+    if (wet) {
+        int wx = (int)std::floor((float)camX);
+        int wz = (int)std::floor((float)camZ);
+        float depth = waterPoolDepth(wx, wz);
+        gWaterDepth += (depth - gWaterDepth) * (1.0f - std::exp(-dt * 5.0f));
+        if (!gDeepWater) {
+            if (gWaterDepth >= 1.72f) gDeepWater = true;
+        }
+        else if (gWaterDepth < 1.38f) gDeepWater = false;
+    }
+    else {
+        gDeepWater = false;
+        gWaterDepth += (0.0f - gWaterDepth) * (1.0f - std::exp(-dt * 6.0f));
+    }
     MoveMode mode = MoveMode::Idle;
     if (gAct == Act::Hang) mode = MoveMode::LedgeHang;
     else if (gAct == Act::Climb) mode = MoveMode::LedgeClimb;
     else if (gAct == Act::Leap) mode = MoveMode::LedgeJump;
     else if (gAct == Act::Slide) mode = MoveMode::Slide;
     else if (gAct == Act::Roll) mode = MoveMode::Roll;
-    else if (wet && gHeadWet && spdNow > 0.55f) mode = MoveMode::Underwater;
-    else if (wet && spdNow > 0.45f) mode = MoveMode::Swim;
-    else if (wet) mode = MoveMode::Float;
+    else if (wet && gDeepWater && gHeadWet && spdNow > 0.55f) mode = MoveMode::Underwater;
+    else if (wet && gDeepWater && spdNow > 0.45f) mode = MoveMode::Swim;
+    else if (wet && gDeepWater) mode = MoveMode::Float;
+    else if (wet && spdNow > 0.35f) mode = MoveMode::Walk;
+    else if (wet) mode = MoveMode::Idle;
     else if (!grounded && !flying && bodyVy > 0.8f) mode = MoveMode::Jump;
     else if (!grounded && !flying) mode = MoveMode::Fall;
     else if (gImpact > 0.2f) mode = MoveMode::Land;

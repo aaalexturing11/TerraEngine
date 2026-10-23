@@ -535,6 +535,13 @@ static glm::mat4 pushArmInFront(glm::mat4 viewM) {
 }
 
 static float gTilt = 0.0f;
+static float gSwimPose = 0.0f;
+static float gWade = 0.0f;
+static float gWadePhase = 0.0f;
+static float gStroke = 0.0f;
+static float gStrokeFwd = 1.2f;
+static float gStrokeYaw = 24.0f;
+static float gStrokeRoll = 0.15f;
 static float gDrop = 0.0f;
 static float gParkour = 0.0f;
 static float gParkourArm = 2.4f;
@@ -576,10 +583,12 @@ static glm::mat4 playerRoot() {
     glm::mat4 m = glm::translate(glm::mat4(1.0f), glm::vec3((float)camX, feet, (float)camZ));
     m = glm::rotate(m, glm::radians(90.0f - gPose.bodyYaw), glm::vec3(0.0f, 1.0f, 0.0f));
     float hip = 12.0f * kScale;
-    m = glm::translate(m, glm::vec3(0.0f, hip, gSquat * 0.16f));
+    float pivot = glm::mix(hip, 28.0f * kScale, gSwimPose);
+    float zBack = -4.0f * kScale;
+    m = glm::translate(m, glm::vec3(0.0f, pivot, gSquat * 0.16f));
     if (std::fabs(gTilt) > 0.001f)
         m = glm::rotate(m, gTilt, glm::vec3(1.0f, 0.0f, 0.0f));
-    return glm::translate(m, glm::vec3(0.0f, -hip, -4.0f * kScale));
+    return glm::translate(m, glm::vec3(0.0f, -pivot, zBack));
 }
 
 static glm::mat4 limbMatrix(const glm::vec3& pivotPx, float forward, float outZ, bool mirror, float yawDeg = 0.0f) {
@@ -652,6 +661,15 @@ static glm::mat4 solveArm(bool left, float raise, float meet) {
     if (gSlidePose > 0.02f) {
         forward = glm::mix(forward, left ? -0.15f : -0.22f, gSlidePose);
         yaw = glm::mix(yaw, left ? 22.0f : -18.0f, gSlidePose);
+    }
+    if (gStroke > 0.02f && gPin < 0.15f && gSlidePose < 0.2f) {
+        forward = glm::mix(forward, gStrokeFwd, gStroke);
+        yaw = glm::mix(yaw, left ? gStrokeYaw : -gStrokeYaw, gStroke);
+        roll = glm::mix(roll, left ? gStrokeRoll : -gStrokeRoll, gStroke);
+    }
+    else if (gWade > 0.02f && gPin < 0.15f && gSlidePose < 0.2f) {
+        yaw = glm::mix(yaw, left ? 26.0f : -26.0f, gWade);
+        roll = glm::mix(roll, left ? 0.16f : -0.16f, gWade);
     }
     if (gPin > 0.02f) {
         forward = glm::mix(forward, left ? gArmFwdL : gArmFwdR, gPin);
@@ -863,6 +881,35 @@ static HeldDraw heldFor(Block block) {
     return d;
 }
 
+static void sampleStroke(float u, float& fwd, float& yaw, float& roll, float& leg) {
+    struct Key { float u, fwd, yaw, roll, leg; };
+    const Key keys[6] = {
+        { 0.00f, 1.48f, 18.0f, 0.10f, 0.08f },
+        { 0.22f, 1.58f, 34.0f, 0.24f, 0.18f },
+        { 0.44f, 1.02f, 76.0f, 0.68f, 0.70f },
+        { 0.66f, 0.12f, 46.0f, 0.30f, 0.16f },
+        { 0.84f, 0.92f, 22.0f, 0.12f, 0.20f },
+        { 1.00f, 1.48f, 18.0f, 0.10f, 0.08f },
+    };
+    if (u < 0.0f) u = 0.0f;
+    if (u > 1.0f) u = 1.0f;
+    for (int i = 0; i < 5; ++i) {
+        if (u <= keys[i + 1].u) {
+            float t = (u - keys[i].u) / (keys[i + 1].u - keys[i].u);
+            t = t * t * (3.0f - 2.0f * t);
+            fwd = glm::mix(keys[i].fwd, keys[i + 1].fwd, t);
+            yaw = glm::mix(keys[i].yaw, keys[i + 1].yaw, t);
+            roll = glm::mix(keys[i].roll, keys[i + 1].roll, t);
+            leg = glm::mix(keys[i].leg, keys[i + 1].leg, t);
+            return;
+        }
+    }
+    fwd = keys[0].fwd;
+    yaw = keys[0].yaw;
+    roll = keys[0].roll;
+    leg = keys[0].leg;
+}
+
 void characterSync(float dt, float time, bool motionLocked) {
     if (!gReady) return;
     if (dt < 0.0f) dt = 0.0f;
@@ -884,13 +931,17 @@ void characterSync(float dt, float time, bool motionLocked) {
     gSwingVis = gSwing > 0.0f ? 0.5f * (1.0f - std::cos(swingT * PI * 2.0f)) : 0.0f;
 
     MoveMode mode = motion.mode;
-    if (!motionLocked && motion.swimming) {
-        float stroke = 1.45f;
-        if (mode == MoveMode::Swim) stroke = 2.15f + motion.horizontalSpeed * 0.8f;
-        else if (mode == MoveMode::Underwater) stroke = 2.35f + motion.horizontalSpeed * 0.9f;
+    bool deepWater = mode == MoveMode::Float || mode == MoveMode::Swim || mode == MoveMode::Underwater;
+    bool wading = motion.swimming && !deepWater && !motion.flying && !motionLocked;
+    if (!motionLocked && (mode == MoveMode::Swim || mode == MoveMode::Underwater)) {
+        float stroke = mode == MoveMode::Underwater
+            ? 2.35f + motion.horizontalSpeed * 0.9f
+            : 2.15f + motion.horizontalSpeed * 0.8f;
         gSwim += dt * stroke;
     }
-    gPhase = (!motionLocked && motion.swimming) ? gSwim : motion.stepPhase;
+    if (wading && motion.horizontalSpeed > 0.2f)
+        gWadePhase += dt * (1.05f + motion.horizontalSpeed * 0.4f);
+    gPhase = deepWater ? gSwim : (wading ? gWadePhase : motion.stepPhase);
 
     if (!motionLocked && motion.grounded && !gWasGround && gPrevVy < -7.0f) gLand = 1.0f;
     gLand *= std::exp(-dt * 8.0f);
@@ -900,7 +951,8 @@ void characterSync(float dt, float time, bool motionLocked) {
     }
 
     float targetWalk = 0.0f;
-    if (!motionLocked && motion.swimming) targetWalk = 1.0f;
+    if (!motionLocked && deepWater) targetWalk = 1.0f;
+    else if (wading) targetWalk = motion.horizontalSpeed > 0.25f ? 0.55f : 0.0f;
     else if (!motionLocked && !motion.flying && motion.grounded && motion.horizontalSpeed > 0.35f)
         targetWalk = motion.sprinting ? 1.0f : 0.78f;
     gWalk = damp(gWalk, targetWalk, dt, motion.horizontalSpeed > 0.35f ? 8.0f : 5.0f);
@@ -919,6 +971,8 @@ void characterSync(float dt, float time, bool motionLocked) {
     gPose.headYaw = 0.0f;
     gPose.headPitch = (float)pitch;
     float pitchTarget = manualClamp(-(float)pitch * 0.10f, -8.0f, 8.0f);
+    if (mode == MoveMode::Float || mode == MoveMode::Swim || mode == MoveMode::Underwater)
+        pitchTarget *= 0.2f;
     bool onLedge = mode == MoveMode::LedgeHang || mode == MoveMode::LedgeClimb || mode == MoveMode::LedgeJump;
     if (motion.crouch > 0.2f && mode != MoveMode::Slide && !onLedge)
         pitchTarget += motion.crouch * 18.0f;
@@ -944,10 +998,18 @@ void characterSync(float dt, float time, bool motionLocked) {
             legL = 0.12f - std::sin(time * 1.05f) * 0.08f;
         }
         else {
-            armR = 1.05f + wave * 1.05f;
-            armL = 1.05f - wave * 1.05f;
-            legR = 0.38f + wave * 0.55f;
-            legL = 0.38f - wave * 0.55f;
+            float u = gSwim * 0.15915494f;
+            u -= std::floor(u);
+            float fwd = 1.2f, yaw = 24.0f, roll = 0.15f, leg = 0.2f;
+            sampleStroke(u, fwd, yaw, roll, leg);
+            float flutter = std::sin(gSwim * 2.0f) * 0.10f;
+            armR = fwd;
+            armL = fwd;
+            legR = leg + flutter;
+            legL = leg - flutter;
+            gStrokeFwd = fwd;
+            gStrokeYaw = yaw;
+            gStrokeRoll = roll;
         }
     }
     else if (gWalk > 0.02f) {
@@ -955,6 +1017,13 @@ void characterSync(float dt, float time, bool motionLocked) {
         armL = swing * 0.95f;
         legR = swing;
         legL = -swing;
+    }
+    if (wading) {
+        float spread = 0.30f + motion.submerge * 0.2f;
+        armR = armR * 0.45f + spread + std::sin(time * 1.6f) * 0.05f;
+        armL = armL * 0.45f + spread + std::sin(time * 1.6f + 0.8f) * 0.05f;
+        legR *= 0.7f;
+        legL *= 0.7f;
     }
     if (jumping) {
         armR = -0.85f;
@@ -1084,10 +1153,19 @@ void characterSync(float dt, float time, bool motionLocked) {
     else gPin = damp(gPin, pinTarget, dt, 7.0f);
     gSquat = damp(gSquat, (!inWater && !ledge && mode != MoveMode::Slide && mode != MoveMode::Roll) ? motion.crouch : 0.0f, dt, 8.0f);
     gSlidePose = damp(gSlidePose, mode == MoveMode::Slide ? 1.0f : 0.0f, dt, 10.0f);
+    gWade = damp(gWade, wading ? manualClamp(0.4f + motion.submerge * 0.6f, 0.0f, 1.0f) : 0.0f, dt, 4.0f);
+    float swimTarget = 0.0f;
+    if (mode == MoveMode::Swim || mode == MoveMode::Underwater) swimTarget = 1.0f;
+    else if (mode == MoveMode::Float) swimTarget = 0.28f;
+    gSwimPose = damp(gSwimPose, swimTarget, dt, 3.4f);
+    gStroke = damp(gStroke, (mode == MoveMode::Swim || mode == MoveMode::Underwater) ? 1.0f : 0.0f, dt, 4.2f);
     float wantTilt = 0.0f;
-    if (mode == MoveMode::Float) wantTilt = 0.16f + std::sin(time * 1.2f) * 0.035f;
-    else if (mode == MoveMode::Swim) wantTilt = 0.32f + manualClamp(motion.horizontalSpeed / 4.2f, 0.0f, 1.0f) * 0.72f;
-    else if (mode == MoveMode::Underwater) wantTilt = manualClamp(-glm::radians((float)pitch), -0.65f, 1.12f);
+    if (mode == MoveMode::Float) wantTilt = 0.22f + std::sin(time * 1.2f) * 0.04f;
+    else if (mode == MoveMode::Swim) wantTilt = 0.96f;
+    else if (mode == MoveMode::Underwater) {
+        float lookTilt = manualClamp(-glm::radians((float)pitch) * 0.5f, -0.15f, 1.05f);
+        wantTilt = manualClamp(glm::mix(0.72f, lookTilt, 0.55f), 0.25f, 1.05f);
+    }
     else if (mode == MoveMode::Slide) wantTilt = -1.05f;
     else if (mode == MoveMode::Roll) wantTilt = std::sin(motion.action * PI) * 1.15f;
     else if (mode == MoveMode::LedgeClimb) {
@@ -1096,7 +1174,10 @@ void characterSync(float dt, float time, bool motionLocked) {
         wantTilt = glm::mix(0.34f * pull, 0.0f, up);
     }
     else if (gSquat > 0.02f) wantTilt = 0.46f * gSquat;
-    gTilt = damp(gTilt, wantTilt, dt, (mode == MoveMode::Roll || mode == MoveMode::Slide || gSquat > 0.02f) ? 9.0f : 4.2f);
+    float tiltRate = 4.2f;
+    if (mode == MoveMode::Roll || mode == MoveMode::Slide || gSquat > 0.02f) tiltRate = 9.0f;
+    else if (mode == MoveMode::Float || mode == MoveMode::Swim || mode == MoveMode::Underwater) tiltRate = 3.6f;
+    gTilt = damp(gTilt, wantTilt, dt, tiltRate);
     float wantDrop = 0.22f * gSquat;
     if (mode == MoveMode::Slide) wantDrop = 0.52f;
     gDrop = damp(gDrop, wantDrop, dt, mode == MoveMode::Slide ? 12.0f : 8.0f);
