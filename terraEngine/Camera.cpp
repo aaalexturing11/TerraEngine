@@ -1096,6 +1096,18 @@ void cameraRenderFrame(glm::vec3& eye, glm::vec3& focus) {
     glm::vec3 dir = cameraViewDirection();
     if (gView == CameraView::First) {
         eye = origin + cameraBobOffset();
+        if (gAct != Act::Slide && gAct != Act::Roll && gCrouch > 0.02f) {
+            float ry = glm::radians((float)yaw);
+            glm::vec3 flat(std::cos(ry), 0.0f, std::sin(ry));
+            float want = gCrouch * 0.46f;
+            float allowed = 0.0f;
+            for (float t = 0.08f; t <= want + 0.001f; t += 0.08f) {
+                if (cameraBlocked(origin + flat * t)) break;
+                allowed = t;
+            }
+            if (allowed > want) allowed = want;
+            eye += flat * allowed;
+        }
         focus = eye + dir;
         return;
     }

@@ -128,6 +128,11 @@ static bool fullCube(Block block) {
 void updateSelectedBlock(GLFWwindow* window) {
     const float maxDist = 8.0f;
     glm::vec3 camPos = cameraPosition();
+    if (cameraFirstPerson()) {
+        glm::vec3 eye, focus;
+        cameraRenderFrame(eye, focus);
+        camPos = eye;
+    }
 
     int w, h;
     glfwGetFramebufferSize(window, &w, &h);

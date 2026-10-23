@@ -576,7 +576,7 @@ static glm::mat4 playerRoot() {
     glm::mat4 m = glm::translate(glm::mat4(1.0f), glm::vec3((float)camX, feet, (float)camZ));
     m = glm::rotate(m, glm::radians(90.0f - gPose.bodyYaw), glm::vec3(0.0f, 1.0f, 0.0f));
     float hip = 12.0f * kScale;
-    m = glm::translate(m, glm::vec3(0.0f, hip, 0.0f));
+    m = glm::translate(m, glm::vec3(0.0f, hip, gSquat * 0.16f));
     if (std::fabs(gTilt) > 0.001f)
         m = glm::rotate(m, gTilt, glm::vec3(1.0f, 0.0f, 0.0f));
     return glm::translate(m, glm::vec3(0.0f, -hip, -4.0f * kScale));
@@ -638,7 +638,7 @@ static glm::mat4 solveArm(bool left, float raise, float meet) {
     float bell = std::sin((1.0f - dip) * PI);
     if (dip > 0.0f) held = glm::mix(held, held * 0.62f, bell);
     if (gSquat > 0.05f && gPin < 0.2f && gSlidePose < 0.2f)
-        held = glm::mix(held, 0.55f, gSquat);
+        held = glm::mix(held, 0.85f, gSquat);
     float forward = glm::mix(pose, held, raise);
     forward = glm::mix(forward, 0.90f, meet);
     if (!left && raise < 0.8f)
@@ -921,7 +921,7 @@ void characterSync(float dt, float time, bool motionLocked) {
     float pitchTarget = manualClamp(-(float)pitch * 0.10f, -8.0f, 8.0f);
     bool onLedge = mode == MoveMode::LedgeHang || mode == MoveMode::LedgeClimb || mode == MoveMode::LedgeJump;
     if (motion.crouch > 0.2f && mode != MoveMode::Slide && !onLedge)
-        pitchTarget += motion.crouch * 16.0f;
+        pitchTarget += motion.crouch * 18.0f;
     gPose.bodyPitch = damp(gPose.bodyPitch, pitchTarget, dt, 6.0f);
     gPose.breathe = std::sin(time * 1.55f) * 0.012f;
 
@@ -1036,10 +1036,10 @@ void characterSync(float dt, float time, bool motionLocked) {
     bool ledge = onLedge;
     if (motion.crouch > 0.04f && !inWater && !ledge && mode != MoveMode::Roll && mode != MoveMode::Slide) {
         float step = gWalk > 0.08f ? std::sin(gPhase) * 0.26f : 0.0f;
-        legR = glm::mix(legR, 1.12f + step, motion.crouch);
-        legL = glm::mix(legL, 1.12f - step, motion.crouch);
-        armR = glm::mix(armR, 0.40f - step * 0.35f, motion.crouch);
-        armL = glm::mix(armL, 0.40f + step * 0.35f, motion.crouch);
+        legR = glm::mix(legR, 0.55f + step, motion.crouch);
+        legL = glm::mix(legL, 0.55f - step, motion.crouch);
+        armR = glm::mix(armR, 0.72f - step * 0.35f, motion.crouch);
+        armL = glm::mix(armL, 0.72f + step * 0.35f, motion.crouch);
     }
     if (mode == MoveMode::Slide) {
         armR = -0.2f;
@@ -1089,9 +1089,9 @@ void characterSync(float dt, float time, bool motionLocked) {
     else if (mode == MoveMode::Slide) wantTilt = -1.05f;
     else if (mode == MoveMode::Roll) wantTilt = std::sin(motion.action * PI) * 1.15f;
     else if (mode == MoveMode::LedgeClimb) wantTilt = glm::mix(0.0f, -0.2f, motion.action);
-    gTilt = damp(gTilt, wantTilt, dt, (mode == MoveMode::Roll || mode == MoveMode::Slide) ? 9.0f : 4.2f);
-    float bend = 1.12f * gSquat;
-    float wantDrop = (12.0f * kScale) * (1.0f - std::cos(bend));
+    else if (gSquat > 0.02f) wantTilt = 0.46f * gSquat;
+    gTilt = damp(gTilt, wantTilt, dt, (mode == MoveMode::Roll || mode == MoveMode::Slide || gSquat > 0.02f) ? 9.0f : 4.2f);
+    float wantDrop = 0.22f * gSquat;
     if (mode == MoveMode::Slide) wantDrop = 0.52f;
     gDrop = damp(gDrop, wantDrop, dt, mode == MoveMode::Slide ? 12.0f : 8.0f);
     if (gPin > 0.02f && motion.gripping) {
