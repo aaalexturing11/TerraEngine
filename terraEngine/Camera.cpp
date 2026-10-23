@@ -23,6 +23,7 @@ static glm::vec3 bobOffset(0.0f);
 static glm::vec3 lookSway(0.0f);
 static glm::vec3 lookSwaySmoothed(0.0f);
 static float idleTime = 0.0f;
+static PlayerMotion gMotion;
 
 void cameraResetMouse() {
     firstMouse = true;
@@ -401,6 +402,15 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
     else if (!wet && speed > 6.0f && grounded) targetFov = 68.0f;
     if (!grounded && !flying && !wet && airTime > 0.12f) targetFov += 2.5f;
     viewFov += (targetFov - viewFov) * (1.0f - std::exp(-dt * 6.0f));
+
+    gMotion.grounded = grounded;
+    gMotion.flying = flying;
+    gMotion.swimming = wet;
+    gMotion.sprinting = !wet && !flying && grounded && speed > 6.0f;
+    gMotion.horizontalSpeed = std::sqrt(bodyVx * bodyVx + bodyVz * bodyVz);
+    gMotion.verticalSpeed = bodyVy;
+    gMotion.airTime = airTime;
+    gMotion.stepPhase = stepPhase;
 }
 
 glm::vec3 cameraBobOffset() { return bobOffset; }
@@ -433,4 +443,8 @@ glm::vec3 cameraLookDirection() {
 
 glm::vec3 cameraVelocity() {
     return glm::vec3(bodyVx, bodyVy, bodyVz);
+}
+
+PlayerMotion cameraMotion() {
+    return gMotion;
 }

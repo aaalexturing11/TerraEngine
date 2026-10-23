@@ -17,6 +17,22 @@ static unsigned gShadowTex = 0;
 static glm::mat4 gShadowMat(1.0f);
 static const int kShadowSize = 1024;
 static int gShadowMapSize = 1024;
+static glm::vec3 gHeldPos(0.0f);
+static glm::vec3 gHeldColor(0.0f);
+static float gHeldRange = 0.0f;
+
+static void uploadHeldLight(unsigned program) {
+    auto loc = [&](const char* n) { return glx.GetUniformLocation(program, n); };
+    glx.Uniform3f(loc("uHeldPos"), gHeldPos.x, gHeldPos.y, gHeldPos.z);
+    glx.Uniform3f(loc("uHeldColor"), gHeldColor.x, gHeldColor.y, gHeldColor.z);
+    glx.Uniform1f(loc("uHeldRange"), gHeldRange);
+}
+
+void setDynamicPointLight(const glm::vec3& position, const glm::vec3& color, float range) {
+    gHeldPos = position;
+    gHeldColor = color;
+    gHeldRange = range > 0.0f ? range : 0.0f;
+}
 
 static const char* kOpaqueVs = R"GLSL(
 #version 330 compatibility
@@ -93,6 +109,9 @@ uniform sampler2D uShadowMap;
 uniform sampler2D uAlbedo;
 uniform mat4 uShadowMat;
 uniform float uShadowSize;
+uniform vec3 uHeldPos;
+uniform vec3 uHeldColor;
+uniform float uHeldRange;
 
 float shadowVis(vec3 world, float ndl) {
     if (ndl < 0.02 || uSunAmt < 0.05) return 1.0;
@@ -142,6 +161,15 @@ void main() {
     vec3 moon = albedo * uMoonColor * ndm * (0.35 + 0.65 * hemi) * ao * skyVis;
     vec3 glow = albedo * emit * 2.6;
     vec3 col = indirect + lampCol + sun + shadowSky + moon + glow;
+    if (uHeldRange > 0.05) {
+        vec3 toL = uHeldPos - vWorld;
+        float dist = length(toL);
+        vec3 dir = toL / max(dist, 0.001);
+        float nd = clamp(dot(n, dir) * 0.65 + 0.35, 0.0, 1.0);
+        float atten = clamp(1.0 - dist / uHeldRange, 0.0, 1.0);
+        atten *= atten;
+        col += albedo * uHeldColor * nd * atten;
+    }
     float fog = smoothstep(118.0, 168.0, length(vWorld.xz - uCam.xz));
     col = mix(col, uSky, fog);
     fragColor = vec4(col, alpha);
@@ -304,6 +332,20 @@ uniform vec4 uRings[8];
 uniform vec4 uRingEx[8];
 uniform vec4 uWake[16];
 uniform vec4 uWakeDir[16];
+uniform vec3 uHeldPos;
+uniform vec3 uHeldColor;
+uniform float uHeldRange;
+
+vec3 heldGlow(vec3 world, vec3 normal) {
+    if (uHeldRange < 0.05) return vec3(0.0);
+    vec3 toL = uHeldPos - world;
+    float dist = length(toL);
+    vec3 dir = toL / max(dist, 0.001);
+    float nd = clamp(dot(normalize(normal), dir) * 0.65 + 0.35, 0.0, 1.0);
+    float atten = clamp(1.0 - dist / uHeldRange, 0.0, 1.0);
+    atten *= atten;
+    return uHeldColor * nd * atten * 0.65;
+}
 
 float ringField(vec2 p, out vec2 grad) {
     float h = 0.0;
@@ -393,6 +435,7 @@ void main() {
             if (d > 1.0) discard;
             float rim = smoothstep(1.0, 0.32, d);
             vec3 col = mix(vec3(0.08, 0.38, 0.55), vec3(0.88, 0.96, 1.0), rim);
+            col += heldGlow(vWorld, geo);
             fragColor = vec4(col, 0.86 * rim * clamp(vFlow.w, 0.2, 1.0));
             return;
         }
@@ -416,6 +459,7 @@ void main() {
         float alpha = mix(0.22, 0.55, deep);
         if (geo.y < -0.45) alpha = mix(0.45, 0.72, deep);
         if (falling) alpha = mix(alpha, 0.48, 0.35);
+        col += heldGlow(vWorld, geo);
         fragColor = vec4(col, alpha);
         return;
     }
@@ -432,6 +476,7 @@ void main() {
         vec3 col = mix(waterCol, skyCol, window * 0.72);
         float sun = pow(max(dot(normalize(vWorld - uCam), L), 0.0), 28.0) * window;
         col += vec3(1.0, 0.98, 0.92) * sun * uSunAmt * 0.28;
+        col += heldGlow(vWorld, geo);
         fragColor = vec4(col, mix(0.9, 0.42, window));
         return;
     }
@@ -478,6 +523,7 @@ void main() {
         col = mix(col, vec3(0.82, 0.9, 0.93), crest * 0.35);
         float fog = smoothstep(130.0, 200.0, dist);
         col = mix(col, uSky, fog);
+        col += heldGlow(vWorld, n);
         fragColor = vec4(col, 0.92);
         return;
     }
@@ -540,6 +586,7 @@ void main() {
     col = mix(col, vec3(0.82, 0.96, 0.98), clamp(wakeFoam * 0.16, 0.0, 0.36));
     float fog = smoothstep(118.0, 168.0, dist);
     col = mix(col, uSky, fog);
+    col += heldGlow(vWorld, n);
     float alpha = mix(0.90, 0.62, shallow);
     fragColor = vec4(col, alpha);
 }
@@ -689,6 +736,7 @@ void bindOpaqueShader(const DayNightLighting& light, float time) {
     glx.Uniform1i(loc("uAlbedo"), 1);
     glx.UniformMatrix4fv(loc("uShadowMat"), 1, GL_FALSE, glm::value_ptr(gShadowMat));
     glx.Uniform1f(loc("uShadowSize"), (float)gShadowMapSize);
+    uploadHeldLight(gOpaque);
     bindShadowTexture();
     glx.ActiveTexture(GL_TEXTURE1);
     glEnable(GL_TEXTURE_2D);
@@ -726,6 +774,7 @@ void bindWaterShader(const glm::mat4& viewProj, const glm::vec3& camPos, const g
     fluidHeightOrigin(ox, oz);
     glx.Uniform2f(loc("uHeightOrigin"), ox, oz);
     glx.UniformMatrix4fv(loc("uShadowMat"), 1, GL_FALSE, glm::value_ptr(gShadowMat));
+    uploadHeldLight(gWater);
     fluidBindMotion(gWater);
     fluidBindHeight(4);
     fluidBindRipple(5);
@@ -741,4 +790,13 @@ void bindFixedPipeline() {
     glDisable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, 0);
     glx.ActiveTexture(GL_TEXTURE0);
+}
+
+void bindWorldShadowSampler() {
+    bindShadowTexture();
+}
+
+void worldShadowParams(glm::mat4& matrix, float& size) {
+    matrix = gShadowMat;
+    size = (float)gShadowMapSize;
 }

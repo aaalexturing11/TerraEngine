@@ -12,6 +12,7 @@
 #include "BlockSelection.h"
 #include "BlockShader.h"
 #include "Camera.h"
+#include "Character.h"
 #include "Clouds.h"
 #include "FluidSolver.h"
 #include "Lighting.h"
@@ -86,6 +87,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     blockTex.triteleia = loadTexture("textures/blocks/triteleia.png", true, true);
     blockTex.triteleiaRed = loadTexture("textures/blocks/triteleia_recolor.png", true, true);
     setBlockTextures(blockTex);
+    initCharacter();
 
     PauseMenuState menuState;
     glfwSwapInterval(menuState.vsyncEnabled ? 1 : 0);
@@ -163,6 +165,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             }
             worldServiceSaves(frameStart);
             cameraUpdateMovement(window, !uiOpen, (float)(frameStart - lastFrameTime));
+            characterSync((float)(frameStart - lastFrameTime), time, uiOpen);
             generated = worldStreamAround((float)camX, (float)camZ);
             setMeshBudget(1);
             fluidSetHeavy(generated == 0);
@@ -230,6 +233,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         }
 
         if (inWorld) {
+        glm::vec3 heldPos(0.0f), heldCol(0.0f);
+        float heldRange = 0.0f;
+        characterHeldLight(heldPos, heldCol, heldRange);
+        setDynamicPointLight(heldPos, heldCol, heldRange);
         bindOpaqueShader(light, time);
         renderOpaqueBlocks(renderRadiusXZ, renderMaxY);
         renderClouds(light, time);
@@ -246,6 +253,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         bindWaterShader(viewProj, cameraPosition(), light.skyColor, light.sunDir, light.sunIntensity, time);
         renderWaterBlocks(renderRadiusXZ, renderMaxY);
         bindFixedPipeline();
+        renderPlayerCharacter(light, time);
 
         if (hasSelected) {
             drawCubeOutline(selectedBlock.x + 0.5f, selectedBlock.y + 0.5f, selectedBlock.z + 0.5f, 1.0f);

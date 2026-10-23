@@ -51,6 +51,9 @@
     <ClInclude Include="Camera.h">
       <Filter>Game</Filter>
     </ClInclude>
+    <ClInclude Include="Character.h">
+      <Filter>Game</Filter>
+    </ClInclude>
     <ClInclude Include="BlockSelection.h">
       <Filter>Game</Filter>
     </ClInclude>
@@ -78,6 +81,9 @@
       <Filter>Game</Filter>
     </ClCompile>
     <ClCompile Include="Camera.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="Character.cpp">
       <Filter>Game</Filter>
     </ClCompile>
     <ClCompile Include="FluidSolver.cpp">

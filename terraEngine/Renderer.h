@@ -26,6 +26,7 @@ struct BlockTextures {
 };
 
 void setBlockTextures(const BlockTextures& textures);
+const BlockTextures& blockTextures();
 void renderOpaqueBlocks(int renderRadiusXZ, int renderMaxY);
 void renderWaterBlocks(int renderRadiusXZ, int renderMaxY);
 void clearWorldMeshes();

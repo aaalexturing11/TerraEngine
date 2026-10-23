@@ -21,3 +21,16 @@ glm::vec3 cameraVelocity();
 glm::vec3 cameraBobOffset();
 float cameraFov();
 bool cameraEyesInWater();
+
+struct PlayerMotion {
+    bool grounded = true;
+    bool flying = false;
+    bool swimming = false;
+    bool sprinting = false;
+    float horizontalSpeed = 0.0f;
+    float verticalSpeed = 0.0f;
+    float airTime = 0.0f;
+    float stepPhase = 0.0f;
+};
+
+PlayerMotion cameraMotion();

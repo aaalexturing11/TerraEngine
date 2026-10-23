@@ -88,6 +88,10 @@ void setBlockTextures(const BlockTextures& textures) {
     gBlockTex = textures;
 }
 
+const BlockTextures& blockTextures() {
+    return gBlockTex;
+}
+
 static void bindAlbedo(unsigned tex) {
     glx.ActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, tex);

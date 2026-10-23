@@ -1,5 +1,6 @@
 #include "BlockSelection.h"
 #include "Camera.h"
+#include "Character.h"
 #include "PauseMenu.h"
 #include "World.h"
 
@@ -147,7 +148,10 @@ const char* selectedPlaceName() {
 }
 
 void handleMouseClick(GLFWwindow*, int button, int action, int) {
-    if (gInventory || paused || !gameMenuInWorld() || action != GLFW_PRESS || !hasSelected) return;
+    if (gInventory || paused || !gameMenuInWorld() || action != GLFW_PRESS) return;
+    if (button == GLFW_MOUSE_BUTTON_LEFT || button == GLFW_MOUSE_BUTTON_RIGHT)
+        characterCueAction(button == GLFW_MOUSE_BUTTON_LEFT);
+    if (!hasSelected) return;
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
         if (blockAt(selectedBlock.x, selectedBlock.y, selectedBlock.z) == Block::Water) return;
         setBlock(selectedBlock.x, selectedBlock.y, selectedBlock.z, Block::Air);
