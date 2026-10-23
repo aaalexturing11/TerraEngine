@@ -14,6 +14,12 @@ void cameraSpawnOnGround();
 void cameraSetSpawn(int x, int y, int z);
 void cameraSetLookEnabled(bool enabled);
 
+enum class CameraView { First = 0, ThirdBack = 1, ThirdFront = 2 };
+void cameraCycleView();
+CameraView cameraView();
+bool cameraFirstPerson();
+void cameraRenderFrame(glm::vec3& eye, glm::vec3& focus);
+
 glm::vec3 cameraPosition();
 glm::vec3 cameraLookDirection();
 glm::vec3 cameraViewDirection();

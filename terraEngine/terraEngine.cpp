@@ -152,6 +152,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             cameraResetMouse();
         }
         eWasDown = eDown;
+        static bool f5WasDown = false;
+        bool f5Down = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
+        if (inWorld && !paused && f5Down && !f5WasDown)
+            cameraCycleView();
+        f5WasDown = f5Down;
         bool uiOpen = !inWorld || paused || inventoryOpen();
         cameraSetLookEnabled(inWorld && !uiOpen);
         glfwSetInputMode(window, GLFW_CURSOR, uiOpen ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
@@ -210,10 +215,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 
         if (inWorld) {
             glLoadIdentity();
-            glm::vec3 bob = cameraBobOffset();
-            glm::vec3 viewLook = cameraViewDirection();
-            gluLookAt(camX + bob.x, camY + bob.y, camZ + bob.z,
-                camX + bob.x + viewLook.x, camY + bob.y + viewLook.y, camZ + bob.z + viewLook.z, 0, 1, 0);
+            glm::vec3 renderEye, renderFocus;
+            cameraRenderFrame(renderEye, renderFocus);
+            gluLookAt(renderEye.x, renderEye.y, renderEye.z, renderFocus.x, renderFocus.y, renderFocus.z, 0, 1, 0);
 
             glm::vec3 viewDir = cameraLookDirection();
             glDepthMask(GL_FALSE);
@@ -246,9 +250,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         int sceneW = 1, sceneH = 1;
         scenePassSize(sceneW, sceneH);
         float sceneAspect = sceneH > 0 ? (float)sceneW / (float)sceneH : 1.0f;
-        glm::vec3 eye = cameraPosition() + cameraBobOffset();
+        glm::vec3 eye, focus;
+        cameraRenderFrame(eye, focus);
         glm::mat4 proj = glm::perspective(glm::radians(cameraFov()), sceneAspect, 0.12f, 360.0f);
-        glm::mat4 view = glm::lookAt(eye, eye + cameraViewDirection(), glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::mat4 view = glm::lookAt(eye, focus, glm::vec3(0.0f, 1.0f, 0.0f));
         glm::mat4 viewProj = proj * view;
         bindWaterShader(viewProj, cameraPosition(), light.skyColor, light.sunDir, light.sunIntensity, time);
         renderWaterBlocks(renderRadiusXZ, renderMaxY);

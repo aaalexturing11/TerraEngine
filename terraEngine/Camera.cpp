@@ -437,6 +437,42 @@ glm::vec3 cameraPosition() {
     return glm::vec3((float)camX, (float)camY, (float)camZ);
 }
 
+static CameraView gView = CameraView::First;
+
+void cameraCycleView() {
+    if (gView == CameraView::First) gView = CameraView::ThirdBack;
+    else if (gView == CameraView::ThirdBack) gView = CameraView::ThirdFront;
+    else gView = CameraView::First;
+}
+
+CameraView cameraView() { return gView; }
+bool cameraFirstPerson() { return gView == CameraView::First; }
+
+static bool cameraBlocked(const glm::vec3& p) {
+    Block block = blockAt((int)std::floor(p.x), (int)std::floor(p.y), (int)std::floor(p.z));
+    return block != Block::Air && block != Block::Water && !isPlant(block);
+}
+
+void cameraRenderFrame(glm::vec3& eye, glm::vec3& focus) {
+    glm::vec3 origin = cameraPosition();
+    glm::vec3 dir = cameraViewDirection();
+    if (gView == CameraView::First) {
+        eye = origin + cameraBobOffset();
+        focus = eye + dir;
+        return;
+    }
+    focus = origin;
+    float sign = gView == CameraView::ThirdBack ? -1.0f : 1.0f;
+    const float reach = 4.0f;
+    const float step = 0.12f;
+    eye = origin;
+    for (float t = 0.35f; t <= reach; t += step) {
+        glm::vec3 next = origin + dir * (sign * t);
+        if (cameraBlocked(next)) break;
+        eye = next;
+    }
+}
+
 glm::vec3 cameraLookDirection() {
     return glm::vec3((float)lookX, (float)lookY, (float)lookZ);
 }

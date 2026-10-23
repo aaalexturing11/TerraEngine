@@ -108,7 +108,7 @@ out vec2 vUv;
 uniform mat4 uViewInv;
 void main() {
     vec4 viewPos = gl_ModelViewMatrix * vec4(gl_Vertex.xyz, 1.0);
-    if (viewPos.z > -0.22)
+    if (viewPos.z < 0.0 && viewPos.z > -0.22)
         viewPos.z = -0.22;
     vWorld = (uViewInv * viewPos).xyz;
     vNormal = normalize(gl_NormalMatrix * gl_Normal);
@@ -446,9 +446,9 @@ bool initCharacter() {
 static bool overlayPart(int id);
 
 static void refreshView() {
-    glm::vec3 eye = cameraPosition() + cameraBobOffset();
-    glm::vec3 dir = cameraViewDirection();
-    gView = glm::lookAt(eye, eye + dir, glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::vec3 eye, focus;
+    cameraRenderFrame(eye, focus);
+    gView = glm::lookAt(eye, focus, glm::vec3(0.0f, 1.0f, 0.0f));
     gViewInv = glm::inverse(gView);
 }
 
@@ -962,24 +962,32 @@ void renderPlayerCharacter(const DayNightLighting& light, float time) {
 
     float out = 0.10f + std::sin(gTime * 1.3f) * 0.02f * (1.0f - gWalk);
     glm::mat4 root = playerRoot();
+    bool first = cameraFirstPerson();
+    bool showBody = !first || lookingDown();
     glm::mat4 body = glm::translate(root, glm::vec3(0.0f, 18.0f, 0.0f) * kScale);
     body = glm::rotate(body, glm::radians(gPose.bodyPitch), glm::vec3(1.0f, 0.0f, 0.0f));
-    drawBody(LegR, limbMatrix(glm::vec3(-2, 12, 0), gPose.legR, 0.0f, false), false);
-    if (gLegacy) drawBody(LegR, limbMatrix(glm::vec3(2, 12, 0), gPose.legL, 0.0f, true), true);
-    else {
-        drawBody(LegL, limbMatrix(glm::vec3(2, 12, 0), gPose.legL, 0.0f, false), false);
-        drawBody(PantsL, limbMatrix(glm::vec3(2, 12, 0), gPose.legL, 0.0f, false), false);
-    }
-    drawBody(PantsR, limbMatrix(glm::vec3(-2, 12, 0), gPose.legR, 0.0f, false), false);
-    if (lookingDown()) {
+    if (showBody) {
+        drawBody(LegR, limbMatrix(glm::vec3(-2, 12, 0), gPose.legR, 0.0f, false), false);
+        if (gLegacy) drawBody(LegR, limbMatrix(glm::vec3(2, 12, 0), gPose.legL, 0.0f, true), true);
+        else {
+            drawBody(LegL, limbMatrix(glm::vec3(2, 12, 0), gPose.legL, 0.0f, false), false);
+            drawBody(PantsL, limbMatrix(glm::vec3(2, 12, 0), gPose.legL, 0.0f, false), false);
+        }
+        drawBody(PantsR, limbMatrix(glm::vec3(-2, 12, 0), gPose.legR, 0.0f, false), false);
         drawBody(Body, body, false);
         drawBody(Jacket, body, false);
+        float arm = (gStyle == SkinArmStyle::Slim) ? 5.5f : 6.0f;
+        if (gLegacy) drawBody(ArmR, limbMatrix(glm::vec3(arm, 24, 0), gPose.armL, out, true), true);
+        else {
+            drawBody(ArmL, limbMatrix(glm::vec3(arm, 24, 0), gPose.armL, out, false), false);
+            drawBody(SleeveL, limbMatrix(glm::vec3(arm, 24, 0), gPose.armL, out, false), false);
+        }
     }
-    float arm = (gStyle == SkinArmStyle::Slim) ? 5.5f : 6.0f;
-    if (gLegacy) drawBody(ArmR, limbMatrix(glm::vec3(arm, 24, 0), gPose.armL, out, true), true);
-    else {
-        drawBody(ArmL, limbMatrix(glm::vec3(arm, 24, 0), gPose.armL, out, false), false);
-        drawBody(SleeveL, limbMatrix(glm::vec3(arm, 24, 0), gPose.armL, out, false), false);
+    if (!first) {
+        glm::mat4 head = glm::translate(root, glm::vec3(0.0f, 24.0f, 0.0f) * kScale);
+        head = glm::rotate(head, glm::radians(-gPose.headPitch), glm::vec3(1.0f, 0.0f, 0.0f));
+        drawBody(Head, head, false);
+        drawBody(Hat, head, false);
     }
 
     HandFrame hand = makeHandFrame();
