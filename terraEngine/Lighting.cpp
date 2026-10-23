@@ -73,27 +73,24 @@ DayNightLighting computeDayNightLighting(double timeSeconds) {
     L.sunDir = glm::normalize(glm::vec3(std::cos(angle), std::sin(angle), 0.10f * std::sin(angle * 0.35f)));
     L.moonDir = glm::normalize(-L.sunDir);
 
-    L.dayFactor = smoothstepf(-0.04f, 0.22f, L.sunDir.y);
-    float nightFactor = 1.0f - L.dayFactor;
-    L.dawnFactor = (tMod < (double)DAWN_LENGTH_SEC)
-        ? (1.0f - (float)(tMod / (double)DAWN_LENGTH_SEC))
-        : 0.0f;
-    double duskStart = (double)DAWN_LENGTH_SEC + (double)DAY_LENGTH_SEC;
-    L.duskFactor = (tMod >= duskStart && tMod < duskStart + (double)DUSK_LENGTH_SEC)
-        ? (float)((tMod - duskStart) / (double)DUSK_LENGTH_SEC)
-        : 0.0f;
-    if (L.dawnFactor > 1.0f) L.dawnFactor = 1.0f;
-    if (L.duskFactor > 1.0f) L.duskFactor = 1.0f;
+    float sunY = L.sunDir.y;
+    L.dayFactor = smoothstepf(-0.20f, 0.48f, sunY);
+    float above = smoothstepf(0.0f, 0.52f, sunY);
+    float buried = smoothstepf(-0.02f, -0.46f, sunY);
+    float twilight = (1.0f - above) * (1.0f - buried);
+    float rising = smoothstepf(-0.25f, 0.25f, std::cos(angle));
+    L.dawnFactor = twilight * rising;
+    L.duskFactor = twilight * (1.0f - rising);
 
-    L.sunIntensity = L.dayFactor;
-    L.moonIntensity = 0.38f * nightFactor;
+    L.sunIntensity = smoothstepf(-0.06f, 0.42f, sunY);
+    L.starFactor = smoothstepf(0.10f, -0.38f, sunY);
+    L.moonIntensity = 0.40f * L.starFactor;
     L.moonPhase = (int)(timeSeconds / (double)CYCLE_LENGTH_SEC);
     if (L.moonPhase < 0) L.moonPhase = 0;
     L.moonPhase %= 8;
 
     glm::vec3 noonSun(1.0f, 0.96f, 0.88f);
-    glm::vec3 riseSun(1.0f, 0.52f, 0.26f);
-    float twilight = L.dawnFactor > L.duskFactor ? L.dawnFactor : L.duskFactor;
+    glm::vec3 riseSun(1.0f, 0.50f, 0.22f);
     L.sunColor = glm::mix(noonSun, riseSun, twilight);
 
     float moonAmt = 1.0f;
@@ -103,12 +100,16 @@ DayNightLighting computeDayNightLighting(double timeSeconds) {
     L.moonColor = glm::vec3(0.62f, 0.72f, 1.0f) * L.moonIntensity * moonAmt;
 
     glm::vec3 ambientDay(0.10f, 0.13f, 0.18f);
-    glm::vec3 ambientNight(0.05f, 0.055f, 0.09f);
-    L.ambientRGB = ambientNight * nightFactor + ambientDay * L.dayFactor;
+    glm::vec3 ambientNight(0.045f, 0.050f, 0.085f);
+    L.ambientRGB = glm::mix(ambientNight, ambientDay, L.dayFactor);
 
-    glm::vec3 skyBase = nightColor * nightFactor + dayColor * L.dayFactor;
-    glm::vec3 twilightCol = glm::mix(dawnColor, duskColor, L.duskFactor);
-    L.skyColor = glm::mix(skyBase, twilightCol, twilight * 0.40f);
+    float dayW = smoothstepf(-0.08f, 0.62f, sunY);
+    float nightW = smoothstepf(0.12f, -0.55f, sunY);
+    float warmW = twilight;
+    float sum = dayW + nightW + warmW;
+    if (sum < 0.001f) sum = 1.0f;
+    glm::vec3 warm = glm::mix(duskColor, dawnColor, rising);
+    L.skyColor = (dayColor * dayW + nightColor * nightW + warm * warmW) / sum;
     return L;
 }
 

@@ -534,11 +534,52 @@ static glm::mat4 pushArmInFront(glm::mat4 viewM) {
     return viewM;
 }
 
+static float gTilt = 0.0f;
+static float gDrop = 0.0f;
+static float gParkour = 0.0f;
+static float gParkourArm = 2.4f;
+static float gPin = 0.0f;
+static float gSquat = 0.0f;
+static float gSlidePose = 0.0f;
+static float gArmFwdR = 2.3f;
+static float gArmFwdL = 2.3f;
+static float gArmYawR = 0.0f;
+static float gArmYawL = 0.0f;
+
+static glm::mat4 playerRoot();
+
+static void aimGrip(bool left, const glm::vec3& grip, float& fwd, float& yawDeg) {
+    float arm = (gStyle == SkinArmStyle::Slim) ? 5.5f : 6.0f;
+    float pivotX = left ? arm : -arm;
+    glm::vec3 shoulder = glm::vec3(playerRoot() * glm::vec4(glm::vec3(pivotX, 24.0f, 0.0f) * kScale, 1.0f));
+    glm::vec3 d = grip - shoulder;
+    float yawRad = glm::radians(90.0f - gPose.bodyYaw);
+    float c = std::cos(yawRad);
+    float s = std::sin(yawRad);
+    float x1 = c * d.x + s * d.z;
+    float z1 = -s * d.x + c * d.z;
+    float ct = std::cos(gTilt);
+    float st = std::sin(gTilt);
+    float lx = x1;
+    float ly = ct * d.y + st * z1;
+    float lz = -st * d.y + ct * z1;
+    float horiz = std::sqrt(lx * lx + lz * lz);
+    float len = std::sqrt(horiz * horiz + ly * ly);
+    if (len < 0.001f) { fwd = 2.3f; yawDeg = 0.0f; return; }
+    fwd = std::atan2(horiz, -ly);
+    yawDeg = manualClamp(glm::degrees(std::atan2(lx, lz)), -75.0f, 75.0f);
+    fwd = manualClamp(fwd, 0.15f, 2.85f);
+}
+
 static glm::mat4 playerRoot() {
-    float feet = (float)camY - kEye + 0.02f - gLand * 0.07f + gPose.breathe;
+    float feet = (float)camY - cameraEyeHeight() + 0.02f - gLand * 0.07f + gPose.breathe - gDrop;
     glm::mat4 m = glm::translate(glm::mat4(1.0f), glm::vec3((float)camX, feet, (float)camZ));
     m = glm::rotate(m, glm::radians(90.0f - gPose.bodyYaw), glm::vec3(0.0f, 1.0f, 0.0f));
-    return glm::translate(m, glm::vec3(0.0f, 0.0f, -4.0f * kScale));
+    float hip = 12.0f * kScale;
+    m = glm::translate(m, glm::vec3(0.0f, hip, 0.0f));
+    if (std::fabs(gTilt) > 0.001f)
+        m = glm::rotate(m, gTilt, glm::vec3(1.0f, 0.0f, 0.0f));
+    return glm::translate(m, glm::vec3(0.0f, -hip, -4.0f * kScale));
 }
 
 static glm::mat4 limbMatrix(const glm::vec3& pivotPx, float forward, float outZ, bool mirror, float yawDeg = 0.0f) {
@@ -596,6 +637,8 @@ static glm::mat4 solveArm(bool left, float raise, float meet) {
     float dip = left ? gDipL : gDip;
     float bell = std::sin((1.0f - dip) * PI);
     if (dip > 0.0f) held = glm::mix(held, held * 0.62f, bell);
+    if (gSquat > 0.05f && gPin < 0.2f && gSlidePose < 0.2f)
+        held = glm::mix(held, 0.55f, gSquat);
     float forward = glm::mix(pose, held, raise);
     forward = glm::mix(forward, 0.90f, meet);
     if (!left && raise < 0.8f)
@@ -606,6 +649,18 @@ static glm::mat4 solveArm(bool left, float raise, float meet) {
     float heldRoll = left ? 0.12f : -0.12f;
     float roll = glm::mix(restRoll, heldRoll, raise);
     roll = glm::mix(roll, left ? 0.04f : -0.04f, meet);
+    if (gSlidePose > 0.02f) {
+        forward = glm::mix(forward, left ? -0.15f : -0.22f, gSlidePose);
+        yaw = glm::mix(yaw, left ? 22.0f : -18.0f, gSlidePose);
+    }
+    if (gPin > 0.02f) {
+        forward = glm::mix(forward, left ? gArmFwdL : gArmFwdR, gPin);
+        yaw = glm::mix(yaw, left ? gArmYawL : gArmYawR, gPin);
+    }
+    else if (gParkour > 0.02f) {
+        forward = glm::mix(forward, gParkourArm, gParkour);
+        yaw = glm::mix(yaw, (left ? -12.0f : 12.0f), gParkour);
+    }
     return limbMatrix(glm::vec3(pivotX, 24.0f, 0.0f), forward, roll, mirror, yaw);
 }
 
@@ -742,6 +797,7 @@ static void updateHands(float dt, Block mainItem, Block offItem) {
     }
     float targetR = passing ? 1.0f : (mainItem != Block::Air ? 1.0f : gSwingVis);
     float targetL = passing ? 1.0f : (offItem != Block::Air ? 1.0f : 0.0f);
+    if (gParkour > 0.35f) { targetR = 1.0f; targetL = 1.0f; }
     gRaiseR = damp(gRaiseR, targetR, dt, 8.0f);
     gRaiseL = damp(gRaiseL, targetL, dt, 8.0f);
     if (!passing && gRaiseR < 0.08f) gStowR = Block::Air;
@@ -827,8 +883,13 @@ void characterSync(float dt, float time, bool motionLocked) {
     float swingT = 1.0f - gSwing;
     gSwingVis = gSwing > 0.0f ? 0.5f * (1.0f - std::cos(swingT * PI * 2.0f)) : 0.0f;
 
-    if (!motionLocked && motion.swimming)
-        gSwim += dt * (5.4f + motion.horizontalSpeed * 0.35f);
+    MoveMode mode = motion.mode;
+    if (!motionLocked && motion.swimming) {
+        float stroke = 1.45f;
+        if (mode == MoveMode::Swim) stroke = 2.15f + motion.horizontalSpeed * 0.8f;
+        else if (mode == MoveMode::Underwater) stroke = 2.35f + motion.horizontalSpeed * 0.9f;
+        gSwim += dt * stroke;
+    }
     gPhase = (!motionLocked && motion.swimming) ? gSwim : motion.stepPhase;
 
     if (!motionLocked && motion.grounded && !gWasGround && gPrevVy < -7.0f) gLand = 1.0f;
@@ -844,15 +905,24 @@ void characterSync(float dt, float time, bool motionLocked) {
         targetWalk = motion.sprinting ? 1.0f : 0.78f;
     gWalk = damp(gWalk, targetWalk, dt, motion.horizontalSpeed > 0.35f ? 8.0f : 5.0f);
 
-    float camYaw = (float)yaw;
-    float follow = wrapDeg(camYaw - gPose.bodyYaw);
-    const float maxFollow = 32.0f;
-    if (follow > maxFollow) gPose.bodyYaw = camYaw - maxFollow;
-    else if (follow < -maxFollow) gPose.bodyYaw = camYaw + maxFollow;
-    gPose.bodyYaw = dampAngle(gPose.bodyYaw, camYaw, dt, 5.5f);
+    if (motion.gripping && mode != MoveMode::LedgeJump) {
+        gPose.bodyYaw = dampAngle(gPose.bodyYaw, motion.ledgeYaw, dt, 9.0f);
+    }
+    else {
+        float camYaw = (float)yaw;
+        float follow = wrapDeg(camYaw - gPose.bodyYaw);
+        const float maxFollow = 32.0f;
+        if (follow > maxFollow) gPose.bodyYaw = camYaw - maxFollow;
+        else if (follow < -maxFollow) gPose.bodyYaw = camYaw + maxFollow;
+        gPose.bodyYaw = dampAngle(gPose.bodyYaw, camYaw, dt, 5.5f);
+    }
     gPose.headYaw = 0.0f;
     gPose.headPitch = (float)pitch;
-    gPose.bodyPitch = damp(gPose.bodyPitch, manualClamp(-(float)pitch * 0.10f, -8.0f, 8.0f), dt, 6.0f);
+    float pitchTarget = manualClamp(-(float)pitch * 0.10f, -8.0f, 8.0f);
+    bool onLedge = mode == MoveMode::LedgeHang || mode == MoveMode::LedgeClimb || mode == MoveMode::LedgeJump;
+    if (motion.crouch > 0.2f && mode != MoveMode::Slide && !onLedge)
+        pitchTarget += motion.crouch * 16.0f;
+    gPose.bodyPitch = damp(gPose.bodyPitch, pitchTarget, dt, 6.0f);
     gPose.breathe = std::sin(time * 1.55f) * 0.012f;
 
     bool air = !motionLocked && !motion.grounded && !motion.flying && !motion.swimming;
@@ -865,11 +935,20 @@ void characterSync(float dt, float time, bool motionLocked) {
     float armL = 0.08f + std::sin(time * 1.2f + 0.6f) * 0.03f * (1.0f - gWalk);
     float legR = 0.0f;
     float legL = 0.0f;
-    if (motion.swimming && !motionLocked) {
-        armR = 0.9f + wave * 0.55f;
-        armL = 0.9f - wave * 0.55f;
-        legR = 0.25f + wave * 0.35f;
-        legL = 0.25f - wave * 0.35f;
+    bool inWater = mode == MoveMode::Float || mode == MoveMode::Swim || mode == MoveMode::Underwater;
+    if (inWater && !motionLocked) {
+        if (mode == MoveMode::Float) {
+            armR = 0.30f + std::sin(time * 1.35f) * 0.10f;
+            armL = 0.30f + std::sin(time * 1.35f + 0.8f) * 0.10f;
+            legR = 0.12f + std::sin(time * 1.05f) * 0.08f;
+            legL = 0.12f - std::sin(time * 1.05f) * 0.08f;
+        }
+        else {
+            armR = 1.05f + wave * 1.05f;
+            armL = 1.05f - wave * 1.05f;
+            legR = 0.38f + wave * 0.55f;
+            legL = 0.38f - wave * 0.55f;
+        }
     }
     else if (gWalk > 0.02f) {
         armR = -swing * 0.95f;
@@ -953,6 +1032,71 @@ void characterSync(float dt, float time, bool motionLocked) {
             gFootYawL = damp(gFootYawL, 0.0f, dt, 4.5f);
             gLegSpread = damp(gLegSpread, 0.0f, dt, 4.5f);
         }
+    }
+    bool ledge = onLedge;
+    if (motion.crouch > 0.04f && !inWater && !ledge && mode != MoveMode::Roll && mode != MoveMode::Slide) {
+        float step = gWalk > 0.08f ? std::sin(gPhase) * 0.26f : 0.0f;
+        legR = glm::mix(legR, 1.12f + step, motion.crouch);
+        legL = glm::mix(legL, 1.12f - step, motion.crouch);
+        armR = glm::mix(armR, 0.40f - step * 0.35f, motion.crouch);
+        armL = glm::mix(armL, 0.40f + step * 0.35f, motion.crouch);
+    }
+    if (mode == MoveMode::Slide) {
+        armR = -0.2f;
+        armL = -0.12f;
+        legR = 1.15f;
+        legL = 1.05f;
+    }
+    else if (mode == MoveMode::Roll) {
+        float tuck = std::sin(motion.action * PI);
+        armR = -0.85f * tuck;
+        armL = -0.85f * tuck;
+        legR = 1.15f * tuck;
+        legL = 1.15f * tuck;
+    }
+    else if (mode == MoveMode::Land) {
+        legR += motion.impact * 0.75f;
+        legL += motion.impact * 0.75f;
+        armR += motion.impact * 0.25f;
+        armL += motion.impact * 0.25f;
+    }
+    else if (mode == MoveMode::LedgeClimb) {
+        float t = motion.action;
+        legR = glm::mix(0.2f, -0.35f, t);
+        legL = glm::mix(0.05f, 0.25f, t);
+    }
+    else if (ledge) {
+        legR = 0.12f + std::sin(time * 1.7f) * 0.07f;
+        legL = -0.04f + std::sin(time * 1.7f + 0.5f) * 0.07f;
+    }
+    float parkourTarget = ledge ? 1.0f : 0.0f;
+    gParkour = damp(gParkour, parkourTarget, dt, ledge ? 10.0f : 7.0f);
+    if (mode == MoveMode::LedgeClimb) gParkourArm = glm::mix(2.2f, 0.38f, motion.action);
+    else if (mode == MoveMode::LedgeJump) gParkourArm = 2.05f;
+    else gParkourArm = 2.3f;
+    float pinTarget = 0.0f;
+    if (motion.gripping && mode == MoveMode::LedgeHang) pinTarget = 1.0f;
+    else if (motion.gripping && mode == MoveMode::LedgeClimb)
+        pinTarget = 1.0f - glm::smoothstep(0.28f, 0.58f, motion.action);
+    if (pinTarget > gPin) gPin = pinTarget;
+    else gPin = damp(gPin, pinTarget, dt, 7.0f);
+    gSquat = damp(gSquat, (!inWater && !ledge && mode != MoveMode::Slide && mode != MoveMode::Roll) ? motion.crouch : 0.0f, dt, 8.0f);
+    gSlidePose = damp(gSlidePose, mode == MoveMode::Slide ? 1.0f : 0.0f, dt, 10.0f);
+    float wantTilt = 0.0f;
+    if (mode == MoveMode::Float) wantTilt = 0.16f + std::sin(time * 1.2f) * 0.035f;
+    else if (mode == MoveMode::Swim) wantTilt = 0.32f + manualClamp(motion.horizontalSpeed / 4.2f, 0.0f, 1.0f) * 0.72f;
+    else if (mode == MoveMode::Underwater) wantTilt = manualClamp(-glm::radians((float)pitch), -0.65f, 1.12f);
+    else if (mode == MoveMode::Slide) wantTilt = -1.05f;
+    else if (mode == MoveMode::Roll) wantTilt = std::sin(motion.action * PI) * 1.15f;
+    else if (mode == MoveMode::LedgeClimb) wantTilt = glm::mix(0.0f, -0.2f, motion.action);
+    gTilt = damp(gTilt, wantTilt, dt, (mode == MoveMode::Roll || mode == MoveMode::Slide) ? 9.0f : 4.2f);
+    float bend = 1.12f * gSquat;
+    float wantDrop = (12.0f * kScale) * (1.0f - std::cos(bend));
+    if (mode == MoveMode::Slide) wantDrop = 0.52f;
+    gDrop = damp(gDrop, wantDrop, dt, mode == MoveMode::Slide ? 12.0f : 8.0f);
+    if (gPin > 0.02f && motion.gripping) {
+        aimGrip(false, motion.gripR, gArmFwdR, gArmYawR);
+        aimGrip(true, motion.gripL, gArmFwdL, gArmYawL);
     }
     armR += gSwingVis * (gMine ? 1.45f : 0.72f);
     gPose.armR = damp(gPose.armR, armR, dt, 12.0f);
@@ -1249,7 +1393,9 @@ void renderPlayerCharacter(const DayNightLighting& light, float time) {
         drawBody(Jacket, body, false);
     }
     if (!first) {
-        glm::mat4 head = glm::translate(root, glm::vec3(0.0f, 24.0f, 0.0f) * kScale);
+        glm::mat4 head = gSquat > 0.02f
+            ? glm::translate(body, glm::vec3(0.0f, 6.0f, 0.0f) * kScale)
+            : glm::translate(root, glm::vec3(0.0f, 24.0f, 0.0f) * kScale);
         head = glm::rotate(head, glm::radians(-gPose.headPitch), glm::vec3(1.0f, 0.0f, 0.0f));
         drawBody(Head, head, false);
         drawBody(Hat, head, false);
@@ -1270,7 +1416,7 @@ void renderPlayerCharacter(const DayNightLighting& light, float time) {
         if (gFromR != Block::Air) drawHeld(gVis.travelR, gFromR, sky, lamp, time);
         if (gFromL != Block::Air) drawHeld(gVis.travelL, gFromL, sky, lamp, time);
     }
-    else {
+    else if (gPin < 0.55f) {
         if (gVis.rightBlock != Block::Air) drawHeld(gVis.rightItem, gVis.rightBlock, sky, lamp, time);
         if (gVis.leftBlock != Block::Air) drawHeld(gVis.leftItem, gVis.leftBlock, sky, lamp, time);
     }

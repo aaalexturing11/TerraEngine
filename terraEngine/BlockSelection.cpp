@@ -265,6 +265,7 @@ const char* selectedPlaceName() {
 
 void handleMouseClick(GLFWwindow*, int button, int action, int) {
     if (gInventory || paused || !gameMenuInWorld() || action != GLFW_PRESS) return;
+    if (button == GLFW_MOUSE_BUTTON_LEFT && cameraOfferLedgeClimb()) return;
     if (button == GLFW_MOUSE_BUTTON_LEFT || button == GLFW_MOUSE_BUTTON_RIGHT)
         characterCueAction(button == GLFW_MOUSE_BUTTON_LEFT);
     if (!hasSelected) return;

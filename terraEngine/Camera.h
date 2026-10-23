@@ -29,6 +29,13 @@ glm::vec3 cameraBobOffset();
 float cameraFov();
 bool cameraEyesInWater();
 
+enum class MoveMode {
+    Idle, Walk, Run, Jump, Fall,
+    Crouch, Slide, Land, Roll,
+    Float, Swim, Underwater,
+    LedgeHang, LedgeClimb, LedgeJump
+};
+
 struct PlayerMotion {
     bool grounded = true;
     bool flying = false;
@@ -38,6 +45,20 @@ struct PlayerMotion {
     float verticalSpeed = 0.0f;
     float airTime = 0.0f;
     float stepPhase = 0.0f;
+    MoveMode mode = MoveMode::Idle;
+    float crouch = 0.0f;
+    float submerge = 0.0f;
+    float action = 0.0f;
+    float lean = 0.0f;
+    float impact = 0.0f;
+    bool headInWater = false;
+    bool gripping = false;
+    float ledgeYaw = 0.0f;
+    glm::vec3 gripR{ 0.0f };
+    glm::vec3 gripL{ 0.0f };
 };
+
+float cameraEyeHeight();
+bool cameraOfferLedgeClimb();
 
 PlayerMotion cameraMotion();

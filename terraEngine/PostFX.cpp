@@ -389,7 +389,8 @@ void presentScene(int width, int height, const DayNightLighting& light, const gl
     glx.Uniform1i(glx.GetUniformLocation(gProgComposite, "uBloom"), 3);
     glx.Uniform1i(glx.GetUniformLocation(gProgComposite, "uDepth"), 4);
     glx.Uniform1f(glx.GetUniformLocation(gProgComposite, "uDay"), light.dayFactor);
-    glx.Uniform1f(glx.GetUniformLocation(gProgComposite, "uDusk"), light.duskFactor);
+    float warm = light.dawnFactor > light.duskFactor ? light.dawnFactor : light.duskFactor;
+    glx.Uniform1f(glx.GetUniformLocation(gProgComposite, "uDusk"), warm);
     glx.Uniform1f(glx.GetUniformLocation(gProgComposite, "uGodStrength"), godStrength);
     glx.Uniform2f(glx.GetUniformLocation(gProgComposite, "uSunUv"), sunUv.x, sunUv.y);
     float exposure = underwater ? 0.84f : (0.96f + 0.12f * (1.0f - light.dayFactor));

@@ -15,6 +15,7 @@ struct DayNightLighting {
     float duskFactor = 0.0f;
     float sunIntensity = 1.0f;
     float moonIntensity = 0.0f;
+    float starFactor = 0.0f;
     int moonPhase = 0;
 };
 

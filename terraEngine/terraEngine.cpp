@@ -18,6 +18,7 @@
 #include "Inventory.h"
 #include "ItemIcon.h"
 #include "Lighting.h"
+#include "MathUtil.h"
 #include "PauseMenu.h"
 #include "PostFX.h"
 #include "Renderer.h"
@@ -26,6 +27,42 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+
+static glm::vec3 gStars[160];
+static bool gStarsReady = false;
+
+static void drawStars(const glm::vec3& cam, float alpha) {
+    if (alpha < 0.015f) return;
+    if (!gStarsReady) {
+        unsigned seed = 214013u;
+        for (int i = 0; i < 160; ++i) {
+            seed = seed * 1664525u + 1013904223u;
+            float u = (seed & 0xffff) / 65535.0f;
+            seed = seed * 1664525u + 1013904223u;
+            float v = ((seed >> 8) & 0xffff) / 65535.0f;
+            float theta = 6.2831853f * u;
+            float y = v * 0.92f + 0.02f;
+            float ring = std::sqrt(1.0f - y * y > 0.0f ? 1.0f - y * y : 0.0f);
+            gStars[i] = glm::vec3(std::cos(theta) * ring, y, std::sin(theta) * ring);
+        }
+        gStarsReady = true;
+    }
+    glDisable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    glPointSize(2.0f);
+    glBegin(GL_POINTS);
+    for (int i = 0; i < 160; ++i) {
+        float tw = 0.55f + 0.45f * (float)((i * 37) % 10) / 9.0f;
+        glColor4f(tw, tw, tw * 0.96f + 0.04f, alpha * (0.45f + 0.55f * tw));
+        glm::vec3 p = cam + gStars[i] * 150.0f;
+        glVertex3f(p.x, p.y, p.z);
+    }
+    glEnd();
+    glPointSize(1.0f);
+    glDepthMask(GL_TRUE);
+}
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 {
@@ -241,13 +278,16 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             bindFixedPipeline();
-            if (light.sunDir.y > -0.06f)
-                drawBillboardTextured(camPos + light.sunDir * 110.0f, viewDir, 10.0f, sunTex, 1.25f);
+            drawStars(camPos, light.starFactor);
+            float sunFade = smoothstepf(-0.14f, 0.10f, light.sunDir.y);
+            if (sunFade > 0.02f)
+                drawBillboardTextured(camPos + light.sunDir * 110.0f, viewDir, 10.0f, sunTex, 1.25f * sunFade);
             int phase = light.moonPhase;
             if (phase < 0) phase = 0;
             if (phase > 7) phase = 7;
-            if (light.moonDir.y > -0.06f && moonTex[phase])
-                drawBillboardTextured(camPos + light.moonDir * 110.0f, viewDir, 6.5f, moonTex[phase], phase == 4 ? 0.35f : 1.15f);
+            float moonFade = smoothstepf(-0.16f, 0.12f, light.moonDir.y) * light.starFactor;
+            if (moonFade > 0.02f && moonTex[phase])
+                drawBillboardTextured(camPos + light.moonDir * 110.0f, viewDir, 6.5f, moonTex[phase], (phase == 4 ? 0.35f : 1.15f) * moonFade);
             glDisable(GL_BLEND);
             glDepthMask(GL_TRUE);
         }
@@ -260,6 +300,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         bindOpaqueShader(light, time);
         renderOpaqueBlocks(renderRadiusXZ, renderMaxY);
         renderClouds(light, time);
+        renderPlayerCharacter(light, time);
 
         blitSceneForWater();
         bindWaterInputs();
@@ -274,7 +315,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         bindWaterShader(viewProj, cameraPosition(), light.skyColor, light.sunDir, light.sunIntensity, time);
         renderWaterBlocks(renderRadiusXZ, renderMaxY);
         bindFixedPipeline();
-        renderPlayerCharacter(light, time);
 
         if (hasSelected) {
             drawSelectionOutline(selectedBlock.x, selectedBlock.y, selectedBlock.z);
