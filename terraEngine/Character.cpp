@@ -84,6 +84,15 @@ static bool gReady = false;
 static bool gStyleForced = false;
 static SkinArmStyle gStyle = SkinArmStyle::Classic;
 static Pose gPose;
+static float gLegYaw = 0.0f;
+static float gPrevBodyYaw = -90.0f;
+static bool gLegReady = false;
+static float gStepDebt = 0.0f;
+static float gStepPhase = 0.0f;
+static int gStepFoot = 0;
+static float gFootYawR = 0.0f;
+static float gFootYawL = 0.0f;
+static float gLegSpread = 0.0f;
 static float gWalk = 0.0f;
 static float gPhase = 0.0f;
 static float gSwim = 0.0f;
@@ -500,8 +509,10 @@ static glm::mat4 playerRoot() {
     return glm::translate(m, glm::vec3(0.0f, 0.0f, -4.0f * kScale));
 }
 
-static glm::mat4 limbMatrix(const glm::vec3& pivotPx, float forward, float outZ, bool mirror) {
+static glm::mat4 limbMatrix(const glm::vec3& pivotPx, float forward, float outZ, bool mirror, float yawDeg = 0.0f) {
     glm::mat4 m = glm::translate(playerRoot(), pivotPx * kScale);
+    if (yawDeg != 0.0f)
+        m = glm::rotate(m, glm::radians(yawDeg), glm::vec3(0.0f, 1.0f, 0.0f));
     if (mirror) m = glm::scale(m, glm::vec3(-1.0f, 1.0f, 1.0f));
     m = glm::rotate(m, outZ, glm::vec3(0.0f, 0.0f, 1.0f));
     return glm::rotate(m, -forward, glm::vec3(1.0f, 0.0f, 0.0f));
@@ -684,11 +695,76 @@ void characterSync(float dt, float time, bool motionLocked) {
         legR = 0.15f;
         legL = 0.15f;
     }
+    float idle = 1.0f - manualClamp(gWalk, 0.0f, 1.0f);
+    if (motion.swimming || jumping || falling) idle *= 0.2f;
+    if (!gLegReady) {
+        gPrevBodyYaw = gPose.bodyYaw;
+        gLegReady = true;
+    }
+    float turned = wrapDeg(gPose.bodyYaw - gPrevBodyYaw);
+    gPrevBodyYaw = gPose.bodyYaw;
+    bool standing = gWalk < 0.08f && !motion.swimming && !jumping && !falling && !motionLocked;
+    float legDamp = 12.0f;
+    if (!standing) {
+        gStepPhase = 0.0f;
+        gStepDebt = 0.0f;
+        gLegYaw -= turned;
+        gLegYaw = damp(gLegYaw, 0.0f, dt, 2.4f + (1.0f - idle) * 5.0f);
+        float cap = 14.0f + 24.0f * idle;
+        gLegYaw = manualClamp(gLegYaw, -cap, cap);
+        float step = glm::radians(gLegYaw) * (0.15f + 0.55f * idle);
+        legR -= step;
+        legL += step * 0.62f;
+        gFootYawR = gLegYaw;
+        gFootYawL = gLegYaw;
+        gLegSpread = std::abs(gLegYaw) * 0.0055f;
+    }
+    else {
+        gLegYaw = damp(gLegYaw, 0.0f, dt, 8.0f);
+        gStepDebt = manualClamp(gStepDebt + turned, -150.0f, 150.0f);
+        if (gStepPhase <= 0.0f && std::abs(gStepDebt) > 14.0f)
+            gStepPhase = 0.001f;
+        if (gStepPhase > 0.0f) {
+            legDamp = 6.5f;
+            gStepPhase += dt * 1.55f;
+            if (gStepPhase > 1.0f) gStepPhase = 1.0f;
+            float lift = 0.5f * (1.0f - std::cos(gStepPhase * PI * 2.0f));
+            float dir = gStepDebt >= 0.0f ? 1.0f : -1.0f;
+            float yawR = 0.0f;
+            float yawL = 0.0f;
+            if (gStepFoot == 0) {
+                legR += lift * 0.13f;
+                legL -= lift * 0.03f;
+                yawR = dir * lift * 3.2f;
+                yawL = -dir * lift * 1.2f;
+            }
+            else {
+                legL += lift * 0.13f;
+                legR -= lift * 0.03f;
+                yawL = dir * lift * 3.2f;
+                yawR = -dir * lift * 1.2f;
+            }
+            gFootYawR = damp(gFootYawR, yawR, dt, 5.0f);
+            gFootYawL = damp(gFootYawL, yawL, dt, 5.0f);
+            gLegSpread = damp(gLegSpread, lift * 0.006f, dt, 5.0f);
+            if (gStepPhase >= 1.0f) {
+                gStepPhase = 0.0f;
+                gStepFoot ^= 1;
+                gStepDebt -= dir * 24.0f;
+                if (std::abs(gStepDebt) < 14.0f) gStepDebt = 0.0f;
+            }
+        }
+        else {
+            gFootYawR = damp(gFootYawR, 0.0f, dt, 4.5f);
+            gFootYawL = damp(gFootYawL, 0.0f, dt, 4.5f);
+            gLegSpread = damp(gLegSpread, 0.0f, dt, 4.5f);
+        }
+    }
     armR += gSwingVis * (gMine ? 1.45f : 0.72f);
     gPose.armR = damp(gPose.armR, armR, dt, 12.0f);
     gPose.armL = damp(gPose.armL, armL, dt, 12.0f);
-    gPose.legR = damp(gPose.legR, legR, dt, 12.0f);
-    gPose.legL = damp(gPose.legL, legL, dt, 12.0f);
+    gPose.legR = damp(gPose.legR, legR, dt, legDamp);
+    gPose.legL = damp(gPose.legL, legL, dt, legDamp);
 
     bool torch = placeSlotBlock(selectedPlaceSlot()) == Block::Torch;
     float targetGlow = (!motionLocked && torch) ? 1.0f : (torch ? 1.0f : 0.0f);
@@ -968,13 +1044,13 @@ void renderPlayerCharacter(const DayNightLighting& light, float time) {
     glm::mat4 body = glm::translate(root, glm::vec3(0.0f, 18.0f, 0.0f) * kScale);
     body = glm::rotate(body, glm::radians(gPose.bodyPitch), glm::vec3(1.0f, 0.0f, 0.0f));
     if (showBody) {
-        drawBody(LegR, limbMatrix(glm::vec3(-2, 12, 0), gPose.legR, 0.0f, false), false);
-        if (gLegacy) drawBody(LegR, limbMatrix(glm::vec3(2, 12, 0), gPose.legL, 0.0f, true), true);
+        drawBody(LegR, limbMatrix(glm::vec3(-2, 12, 0), gPose.legR, -gLegSpread, false, gFootYawR), false);
+        if (gLegacy) drawBody(LegR, limbMatrix(glm::vec3(2, 12, 0), gPose.legL, gLegSpread, true, gFootYawL), true);
         else {
-            drawBody(LegL, limbMatrix(glm::vec3(2, 12, 0), gPose.legL, 0.0f, false), false);
-            drawBody(PantsL, limbMatrix(glm::vec3(2, 12, 0), gPose.legL, 0.0f, false), false);
+            drawBody(LegL, limbMatrix(glm::vec3(2, 12, 0), gPose.legL, gLegSpread, false, gFootYawL), false);
+            drawBody(PantsL, limbMatrix(glm::vec3(2, 12, 0), gPose.legL, gLegSpread, false, gFootYawL), false);
         }
-        drawBody(PantsR, limbMatrix(glm::vec3(-2, 12, 0), gPose.legR, 0.0f, false), false);
+        drawBody(PantsR, limbMatrix(glm::vec3(-2, 12, 0), gPose.legR, -gLegSpread, false, gFootYawR), false);
         drawBody(Body, body, false);
         drawBody(Jacket, body, false);
         float arm = (gStyle == SkinArmStyle::Slim) ? 5.5f : 6.0f;
