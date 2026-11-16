@@ -1,10 +1,10 @@
-# TerraEngine
+# RunesRuins
 
 **An open-source voxel-based 3D engine for building immersive worlds, interactive experiences, and physics-driven environments.**
 
-TerraEngine is a free and open-source 3D engine inspired by the creative freedom and visual identity of voxel-based sandbox games such as Minecraft. Designed to go beyond traditional block-based gameplay, TerraEngine combines real-time rendering, procedural world generation, dynamic environmental systems, and extensible gameplay mechanics into a flexible foundation for developers and creators.
+RunesRuins is a free and open-source 3D engine inspired by the creative freedom and visual identity of voxel-based sandbox games such as Minecraft. Designed to go beyond traditional block-based gameplay, RunesRuins combines real-time rendering, procedural world generation, dynamic environmental systems, and extensible gameplay mechanics into a flexible foundation for developers and creators.
 
-Whether you're developing a voxel survival game, creating a cinematic environment, experimenting with 3D physics, or building an interactive experience, TerraEngine provides the tools and systems to bring your ideas to life.
+Whether you're developing a voxel survival game, creating a cinematic environment, experimenting with 3D physics, or building an interactive experience, RunesRuins provides the tools and systems to bring your ideas to life.
 
 ## Features
 
@@ -36,7 +36,7 @@ Whether you're developing a voxel survival game, creating a cinematic environmen
 
 ## What Can You Build?
 
-TerraEngine is designed as a flexible platform rather than a single-purpose game.
+RunesRuins is designed as a flexible platform rather than a single-purpose game.
 
 | Application | Description |
 |---|---|
@@ -49,43 +49,43 @@ TerraEngine is designed as a flexible platform rather than a single-purpose game
 
 ## Built-In Foundations
 
-TerraEngine provides a collection of core systems to accelerate development without forcing developers into a specific type of project.
+RunesRuins provides a collection of core systems to accelerate development without forcing developers into a specific type of project.
 
 These include procedural biomes, cave generation, world environments, voxel interactions, crafting mechanics, predefined recipes, and basic gameplay progression elements.
 
 Developers can use these systems as provided, extend them, or build entirely new experiences on top of the engine.
 
-**TerraEngine is an engine, not a predefined game.** Its goal is to provide the underlying technology while leaving creative direction and gameplay design to the developer.
+**RunesRuins is an engine, not a predefined game.** Its goal is to provide the underlying technology while leaving creative direction and gameplay design to the developer.
 
 ## Open Source & Free to Use
 
-TerraEngine is a free and open-source project built around accessibility, experimentation, and creative freedom.
+RunesRuins is a free and open-source project built around accessibility, experimentation, and creative freedom.
 
 You are free to:
 
-- **Use** TerraEngine for personal, educational, research, and commercial projects.
+- **Use** RunesRuins for personal, educational, research, and commercial projects.
 - **Create and distribute** games, simulations, cinematics, and other experiences using the engine.
 - **Modify and extend** the engine to fit your project's requirements.
 - **Study and contribute** to its development.
-- **Keep your projects private or proprietary.** Using TerraEngine does not require you to publish your own source code.
+- **Keep your projects private or proprietary.** Using RunesRuins does not require you to publish your own source code.
 
 ### Attribution
 
 Attribution is completely optional.
 
-Developers are welcome to credit TerraEngine in their projects, but **there is no requirement to display the engine's name, logo, or branding in games, applications, cinematics, or other creations.**
+Developers are welcome to credit RunesRuins in their projects, but **there is no requirement to display the engine's name, logo, or branding in games, applications, cinematics, or other creations.**
 
 If you would like to support the project through attribution, you can use:
 
-**Powered by TerraEngine**
+**Powered by RunesRuins**
 
 or
 
-**Built with TerraEngine**
+**Built with RunesRuins**
 
 This can be included in your project's credits, documentation, README, or anywhere you find appropriate.
 
-**Attribution is appreciated, but never required as a condition of using TerraEngine.**
+**Attribution is appreciated, but never required as a condition of using RunesRuins.**
 
 The applicable open-source license and its required copyright or license notices, if any, are defined in the repository's `LICENSE` file.
 
@@ -93,7 +93,7 @@ The applicable open-source license and its required copyright or license notices
 
 Contributions are welcome!
 
-TerraEngine is intended to grow through community collaboration, experimentation, and improvements.
+RunesRuins is intended to grow through community collaboration, experimentation, and improvements.
 
 Whether you're interested in graphics programming, procedural generation, physics, engine architecture, optimization, or developer tooling, contributions of all kinds are appreciated.
 
@@ -110,7 +110,7 @@ You can contribute by:
 
 **Create worlds. Simulate possibilities. Build without limits.**
 
-TerraEngine aims to make advanced voxel rendering and dynamic worlds accessible to developers, researchers, artists, and independent creators.
+RunesRuins aims to make advanced voxel rendering and dynamic worlds accessible to developers, researchers, artists, and independent creators.
 
 Rather than restricting the engine to one gameplay formula, the project focuses on providing reusable graphical and environmental systems that can support a wide variety of creative and technical applications.
 
@@ -118,4 +118,4 @@ The objective is simple: give creators the freedom to build their own worlds, sy
 
 ---
 
-**TerraEngine | An open foundation for limitless voxel worlds.**
+**RunesRuins | An open foundation for limitless voxel worlds.**
