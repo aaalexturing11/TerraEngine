@@ -185,13 +185,13 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         }
 
         const bool inWorld = gameMenuInWorld();
-        static bool eWasDown = false;
-        bool eDown = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
-        if (inWorld && eDown && !eWasDown && !paused) {
+        static bool tabWasDown = false;
+        bool tabDown = glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS;
+        if (inWorld && tabDown && !tabWasDown && !paused) {
             setInventoryOpen(!inventoryOpen());
             cameraResetMouse();
         }
-        eWasDown = eDown;
+        tabWasDown = tabDown;
         static bool f5WasDown = false;
         bool f5Down = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
         if (inWorld && !paused && f5Down && !f5WasDown)
