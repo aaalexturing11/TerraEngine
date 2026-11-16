@@ -627,6 +627,15 @@ static glm::mat4 viewmodelArm() {
     return gViewInv * pushArmInFront(viewArm);
 }
 
+static float recoverDepth(float t, float level) {
+    bool strong = level > 0.85f;
+    float hold = strong ? 0.56f : 0.36f;
+    float up = strong ? 0.96f : 0.82f;
+    float a = glm::smoothstep(0.02f, 0.20f, t);
+    float b = 1.0f - glm::smoothstep(hold, up, t);
+    return a * b;
+}
+
 static float ease(float a, float b, float x) {
     float t = (x - a) / (b - a);
     if (t < 0.0f) t = 0.0f;
@@ -1128,6 +1137,23 @@ void characterSync(float dt, float time, bool motionLocked) {
         legR = 1.15f * tuck;
         legL = 1.15f * tuck;
     }
+    else if (mode == MoveMode::Land && motion.recover > 0.0f) {
+        float t = motion.action;
+        float depth = recoverDepth(t, motion.recover);
+        bool strong = motion.recover > 0.85f;
+        float bend = (strong ? 1.22f : 0.78f) * depth;
+        legR = bend;
+        legL = bend * 0.94f;
+        float reach = glm::smoothstep(0.0f, 0.24f, t);
+        armR = glm::mix(0.30f, strong ? 1.65f : 1.25f, reach);
+        armL = armR;
+        if (!strong && motion.plant > 0) armL = glm::mix(armL, 0.28f, depth);
+        if (!strong && motion.plant < 0) armR = glm::mix(armR, 0.28f, depth);
+        gFootYawR = 0.0f;
+        gFootYawL = 0.0f;
+        gLegSpread = 0.10f * depth;
+        legDamp = 18.0f;
+    }
     else if (mode == MoveMode::Land) {
         legR += motion.impact * 0.75f;
         legL += motion.impact * 0.75f;
@@ -1171,7 +1197,17 @@ void characterSync(float dt, float time, bool motionLocked) {
     else gParkourArm = 2.3f;
     float pinTarget = 0.0f;
     gPlantSide = 0;
-    if (mode == MoveMode::Vault && motion.vaultHand != 0) {
+    if (mode == MoveMode::Land && motion.recover > 0.0f && motion.plant != 0) {
+        float t = motion.action;
+        bool strong = motion.recover > 0.85f;
+        float hold = strong ? 0.56f : 0.36f;
+        float pinIn = glm::smoothstep(0.10f, 0.28f, t);
+        float pinOut = 1.0f - glm::smoothstep(hold + 0.06f, hold + 0.30f, t);
+        pinTarget = pinIn * pinOut;
+        if (motion.plant == 2) gPlantSide = 0;
+        else gPlantSide = motion.plant > 0 ? 1 : -1;
+    }
+    else if (mode == MoveMode::Vault && motion.vaultHand != 0) {
         float t = motion.action;
         float hold = glm::smoothstep(0.12f, 0.30f, t) * (1.0f - glm::smoothstep(0.58f, 0.76f, t));
         pinTarget = hold;
@@ -1210,20 +1246,35 @@ void characterSync(float dt, float time, bool motionLocked) {
         wantTilt = 0.32f * lift;
         gRoll = damp(gRoll, (motion.vaultHand > 0 ? -0.42f : 0.42f) * lift, dt, 8.0f);
     }
+    else if (motion.recover > 0.0f) {
+        float t = motion.action;
+        float depth = recoverDepth(t, motion.recover);
+        bool strong = motion.recover > 0.85f;
+        wantTilt = (strong ? 1.12f : 0.92f) * depth;
+        if (strong) {
+            float stun = glm::smoothstep(0.24f, 0.40f, t) * (1.0f - glm::smoothstep(0.50f, 0.64f, t));
+            wantTilt += std::sin(time * 2.4f) * 0.02f * stun;
+        }
+    }
     else if (gSquat > 0.02f) wantTilt = 0.46f * gSquat;
     float tiltRate = 4.2f;
-    if (mode == MoveMode::Roll || mode == MoveMode::Slide || gSquat > 0.02f) tiltRate = 9.0f;
+    if (motion.recover > 0.0f) tiltRate = 14.0f;
+    else if (mode == MoveMode::Roll || mode == MoveMode::Slide || gSquat > 0.02f) tiltRate = 9.0f;
     else if (mode == MoveMode::Float || mode == MoveMode::Swim || mode == MoveMode::Underwater) tiltRate = 3.6f;
     gTilt = damp(gTilt, wantTilt, dt, tiltRate);
     if (mode != MoveMode::Vault) gRoll = damp(gRoll, 0.0f, dt, 8.0f);
     float wantDrop = 0.22f * gSquat;
     if (mode == MoveMode::Slide) wantDrop = 0.52f;
-    gDrop = damp(gDrop, wantDrop, dt, mode == MoveMode::Slide ? 12.0f : 8.0f);
-    if (gPin > 0.02f && (motion.gripping || mode == MoveMode::Vault)) {
+    else if (motion.recover > 0.0f) {
+        float depth = recoverDepth(motion.action, motion.recover);
+        wantDrop = (motion.recover > 0.85f ? 0.49f : 0.36f) * depth;
+    }
+    gDrop = damp(gDrop, wantDrop, dt, motion.recover > 0.0f ? 14.0f : (mode == MoveMode::Slide ? 12.0f : 8.0f));
+    if (gPin > 0.02f && (motion.gripping || mode == MoveMode::Vault || (mode == MoveMode::Land && motion.recover > 0.0f))) {
         if (gPlantSide >= 0) aimGrip(false, motion.gripR, gArmFwdR, gArmYawR);
         if (gPlantSide <= 0) aimGrip(true, motion.gripL, gArmFwdL, gArmYawL);
     }
-    armR += gSwingVis * (gMine ? 1.45f : 0.72f);
+    if (motion.recover <= 0.0f) armR += gSwingVis * (gMine ? 1.45f : 0.72f);
     gPose.armR = damp(gPose.armR, armR, dt, 12.0f);
     gPose.armL = damp(gPose.armL, armL, dt, 12.0f);
     gPose.legR = damp(gPose.legR, legR, dt, legDamp);

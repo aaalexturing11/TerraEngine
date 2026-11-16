@@ -58,6 +58,8 @@ struct PlayerMotion {
     glm::vec3 gripR{ 0.0f };
     glm::vec3 gripL{ 0.0f };
     int vaultHand = 0;
+    float recover = 0.0f;
+    int plant = 0;
 };
 
 float cameraEyeHeight();

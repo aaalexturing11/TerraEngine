@@ -79,7 +79,7 @@ static float gSub = 0.0f;
 static bool gHeadWet = false;
 static float gLedgeLock = 0.0f;
 
-enum class Act { None, Slide, Roll, Hang, Climb, Leap, Vault };
+enum class Act { None, Slide, Roll, Hang, Climb, Leap, Vault, Recover };
 static Act gAct = Act::None;
 static float gActT = 0.0f;
 static glm::vec3 gActDir(0.0f, 0.0f, -1.0f);
@@ -146,6 +146,12 @@ static int gVaultHand = 1;
 static glm::vec3 gVaultFrom(0.0f);
 static glm::vec3 gVaultTo(0.0f);
 static glm::vec3 gVaultPlant(0.0f);
+static float gRecoverDur = 0.70f;
+static float gRecoverLevel = 0.0f;
+static float gRecoverVis = 0.0f;
+static int gRecoverPlant = 0;
+static glm::vec3 gRecoverR(0.0f);
+static glm::vec3 gRecoverL(0.0f);
 
 static bool overlapsWater(float x, float feet, float z) {
     const float heights[3] = { 0.2f, 0.55f, 0.95f };
@@ -454,6 +460,9 @@ void cameraSetSpawn(int x, int y, int z) {
     gCrouch = 0.0f;
     gAct = Act::None;
     gImpact = 0.0f;
+    gRecoverVis = 0.0f;
+    gRecoverLevel = 0.0f;
+    gRecoverPlant = 0;
     gViewRoll = 0.0f;
     camY = (double)y + 1.0 + (double)gEyeH;
     bodyVx = bodyVy = bodyVz = 0.0f;
@@ -524,6 +533,68 @@ static glm::vec3 vaultFeetAt(float u, const glm::vec3& from, const glm::vec3& to
     return p;
 }
 
+static float recoverDepth(float t, float level) {
+    bool strong = level > 0.85f;
+    float hold = strong ? 0.56f : 0.36f;
+    float up = strong ? 0.96f : 0.82f;
+    float a = glm::smoothstep(0.02f, 0.20f, t);
+    float b = 1.0f - glm::smoothstep(hold, up, t);
+    return a * b;
+}
+
+static bool groundPoint(float x, float z, float feet, glm::vec3& out) {
+    int ix = (int)std::floor(x);
+    int iz = (int)std::floor(z);
+    int topY = (int)std::floor(feet + 0.25f);
+    for (int iy = topY; iy >= topY - 2 && iy >= 1; --iy) {
+        if (!blockedCell(ix, iy, iz) || blockedCell(ix, iy + 1, iz)) continue;
+        float top = (float)(iy + 1);
+        if (top > feet + 0.35f || top < feet - 1.25f) continue;
+        out.x = manualClamp(x, (float)ix + 0.18f, (float)ix + 0.82f);
+        out.y = top + 0.02f;
+        out.z = manualClamp(z, (float)iz + 0.18f, (float)iz + 0.82f);
+        return true;
+    }
+    return false;
+}
+
+static bool seekPlant(const glm::vec3& fwd, const glm::vec3& side, float px, float feet, float pz, float sign, glm::vec3& slot) {
+    const float reach[3] = { 0.46f, 0.32f, 0.18f };
+    const float apart[3] = { 0.16f, 0.10f, 0.06f };
+    for (int i = 0; i < 3; ++i) {
+        float x = px + fwd.x * reach[i] + side.x * apart[i] * sign;
+        float z = pz + fwd.z * reach[i] + side.z * apart[i] * sign;
+        if (groundPoint(x, z, feet, slot)) return true;
+    }
+    return groundPoint(px + side.x * 0.12f * sign, pz + side.z * 0.12f * sign, feet, slot);
+}
+
+static void beginRecovery(float px, float feet, float pz, float impact, float level) {
+    if (gAct != Act::None) return;
+    float ry = glm::radians((float)yaw);
+    glm::vec3 fwd(std::cos(ry), 0.0f, std::sin(ry));
+    glm::vec3 side(-std::sin(ry), 0.0f, std::cos(ry));
+    bool right = seekPlant(fwd, side, px, feet, pz, 1.0f, gRecoverR);
+    bool left = seekPlant(fwd, side, px, feet, pz, -1.0f, gRecoverL);
+    int plant = 0;
+    if (level > 0.85f && right && left) plant = 2;
+    else if (right) { plant = 1; gRecoverL = gRecoverR; }
+    else if (left) { plant = -1; gRecoverR = gRecoverL; }
+    float extra = impact - (level > 0.85f ? 14.0f : 9.5f);
+    if (extra < 0.0f) extra = 0.0f;
+    if (extra > 24.0f) extra = 24.0f;
+    gAct = Act::Recover;
+    gActT = 0.0f;
+    gRecoverLevel = level;
+    gRecoverPlant = plant;
+    gRecoverDur = level > 0.85f ? 0.74f + extra * 0.008f : 0.52f + extra * 0.004f;
+    gImpact = level;
+    gSprint = false;
+    float keep = level > 0.85f ? 0.32f : 0.55f;
+    bodyVx *= keep;
+    bodyVz *= keep;
+}
+
 void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
     if (!allowMove) return;
     if (dt < 0.0f) dt = 0.0f;
@@ -583,7 +654,8 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
             bodyVy = 6.4f;
             grounded = false;
         }
-        else if (!flying && grounded && !wet && gAct != Act::Slide && gAct != Act::Roll) {
+        else if (!flying && grounded && !wet && gAct != Act::Slide && gAct != Act::Roll
+            && !(gAct == Act::Recover && gActT < 0.62f)) {
             bool didVault = false;
             float sp = std::sqrt(bodyVx * bodyVx + bodyVz * bodyVz);
             if (gAct == Act::None && !shift && gCrouch < 0.4f && w && (gSprint || ctrl) && sp > 6.0f) {
@@ -624,6 +696,17 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
         gAct = Act::None;
         gSprint = false;
     }
+    if (gAct == Act::Recover) {
+        float dur = gRecoverDur < 0.20f ? 0.70f : gRecoverDur;
+        gActT += dt / dur;
+        if (gActT > 1.0f) gActT = 1.0f;
+        if (gActT >= 1.0f || !grounded) {
+            gAct = Act::None;
+            gActT = 0.0f;
+            gImpact = 0.0f;
+            gRecoverPlant = 0;
+        }
+    }
     else if (shiftEdge && sprinting && gAct == Act::None && grounded && horiz > 6.0f) {
         gAct = Act::Slide;
         gActT = 0.0f;
@@ -647,11 +730,19 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
     float targetEye = kStandEye + (kCrouchEye - kStandEye) * gCrouch;
     if (gAct == Act::Slide) { targetH = kSlideH; targetEye = kSlideEye; }
     if (gAct == Act::Vault) { targetH = 1.15f; targetEye = kStandEye; }
+    if (gAct == Act::Recover) {
+        float depth = recoverDepth(gActT, gRecoverLevel);
+        bool strong = gRecoverLevel > 0.85f;
+        float eye = kStandEye - (strong ? 0.70f : 0.42f) * depth;
+        float h = kStandH - (strong ? 0.58f : 0.28f) * depth;
+        if (targetEye > eye) targetEye = eye;
+        if (targetH > h) targetH = h;
+    }
     if (targetH > gBodyH + 0.04f && !fits((float)camX, feetNow, (float)camZ, targetH)) {
         targetH = gBodyH;
         targetEye = gEyeH;
     }
-    float grow = 1.0f - std::exp(-dt * 10.0f);
+    float grow = 1.0f - std::exp(-dt * (gAct == Act::Recover ? 16.0f : 10.0f));
     gBodyH += (targetH - gBodyH) * grow;
     gEyeH += (targetEye - gEyeH) * grow;
 
@@ -667,6 +758,12 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
     if (a) wish -= right;
     if (d) wish += right;
     if (glm::length(wish) > 0.001f) wish = glm::normalize(wish) * speed;
+    if (gAct == Act::Recover) {
+        float depth = recoverDepth(gActT, gRecoverLevel);
+        float gate = 1.0f - depth * (gRecoverLevel > 0.85f ? 0.78f : 0.42f);
+        if (gate < 0.22f) gate = 0.22f;
+        wish *= gate;
+    }
 
     float feet = feetNow;
     float px = (float)camX;
@@ -1067,9 +1164,15 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
                         gActSpeed = hl > 4.4f ? hl : 4.4f;
                         gImpact = 0.4f;
                     }
-                    else gImpact = 1.0f;
+                    else {
+                        gImpact = 1.0f;
+                        beginRecovery((float)camX, feet, (float)camZ, impact, 1.0f);
+                    }
                 }
-                else if (!intoWater && impact > 9.5f) gImpact = 0.7f;
+                else if (!intoWater && impact > 9.5f) {
+                    gImpact = 0.7f;
+                    beginRecovery((float)camX, feet, (float)camZ, impact, 0.7f);
+                }
                 bodyVy = 0.0f;
                 grounded = true;
                 airTime = 0.0f;
@@ -1101,6 +1204,11 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
     if (gAct == Act::Vault) {
         float lean = (gVaultHand > 0 ? -0.07f : 0.07f) * std::sin(gActT * PI);
         gViewRoll += (lean - gViewRoll) * (1.0f - std::exp(-dt * 8.0f));
+    }
+    {
+        float depth = gAct == Act::Recover ? recoverDepth(gActT, gRecoverLevel) : 0.0f;
+        gRecoverVis += (depth - gRecoverVis) * (1.0f - std::exp(-dt * 14.0f));
+        if (gRecoverVis < 0.001f) gRecoverVis = 0.0f;
     }
     gClimbClick = false;
     gGrabPress = false;
@@ -1202,6 +1310,7 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
     else if (gAct == Act::Vault) mode = MoveMode::Vault;
     else if (gAct == Act::Slide) mode = MoveMode::Slide;
     else if (gAct == Act::Roll) mode = MoveMode::Roll;
+    else if (gAct == Act::Recover) mode = MoveMode::Land;
     else if (wet && gDeepWater && gHeadWet && spdNow > 0.55f) mode = MoveMode::Underwater;
     else if (wet && gDeepWater && spdNow > 0.45f) mode = MoveMode::Swim;
     else if (wet && gDeepWater) mode = MoveMode::Float;
@@ -1214,7 +1323,7 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
     else if (!flying && grounded && speed > 6.0f && spdNow > 0.5f) mode = MoveMode::Run;
     else if (spdNow > 0.35f) mode = MoveMode::Walk;
     float action = 0.0f;
-    if (gAct == Act::Roll || gAct == Act::Climb || gAct == Act::Leap || gAct == Act::Vault) action = gActT;
+    if (gAct == Act::Roll || gAct == Act::Climb || gAct == Act::Leap || gAct == Act::Vault || gAct == Act::Recover) action = gActT;
     else if (gAct == Act::Slide) action = manualClamp(gActSpeed / 7.0f, 0.0f, 1.0f);
     else if (gAct == Act::Hang) action = 1.0f;
 
@@ -1235,9 +1344,11 @@ void cameraUpdateMovement(GLFWwindow* window, bool allowMove, float dt) {
     gMotion.headInWater = gHeadWet;
     gMotion.gripping = gAct == Act::Hang || gAct == Act::Climb;
     gMotion.ledgeYaw = gLedgeYaw;
-    gMotion.gripR = gAct == Act::Vault ? gVaultPlant : gGripR;
-    gMotion.gripL = gAct == Act::Vault ? gVaultPlant : gGripL;
+    gMotion.gripR = gAct == Act::Vault ? gVaultPlant : (gAct == Act::Recover ? gRecoverR : gGripR);
+    gMotion.gripL = gAct == Act::Vault ? gVaultPlant : (gAct == Act::Recover ? gRecoverL : gGripL);
     gMotion.vaultHand = gAct == Act::Vault ? gVaultHand : 0;
+    gMotion.recover = gAct == Act::Recover ? gRecoverLevel : 0.0f;
+    gMotion.plant = gAct == Act::Recover ? gRecoverPlant : 0;
 }
 
 bool cameraOfferLedgeClimb() {
@@ -1310,10 +1421,12 @@ void cameraRenderFrame(glm::vec3& eye, glm::vec3& focus) {
     glm::vec3 dir = cameraViewDirection();
     if (gView == CameraView::First) {
         eye = origin + cameraBobOffset();
-        if (gAct != Act::Slide && gAct != Act::Roll && gCrouch > 0.02f) {
+        if (gAct != Act::Slide && gAct != Act::Roll && (gCrouch > 0.02f || gRecoverVis > 0.02f)) {
             float ry = glm::radians((float)yaw);
             glm::vec3 flat(std::cos(ry), 0.0f, std::sin(ry));
             float want = gCrouch * 0.46f;
+            float brace = gRecoverVis * (gRecoverLevel > 0.85f ? 0.46f : 0.22f);
+            if (brace > want) want = brace;
             float allowed = 0.0f;
             for (float t = 0.08f; t <= want + 0.001f; t += 0.08f) {
                 if (cameraBlocked(origin + flat * t)) break;
