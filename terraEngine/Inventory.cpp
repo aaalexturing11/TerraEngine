@@ -1,12 +1,17 @@
 #include "Inventory.h"
 
+#include "Character.h"
+#include "DroppedItems.h"
 #include "ItemIcon.h"
 
 #include "imgui.h"
 
 #include <cmath>
+#include <cstdio>
 
 static Block gSlot[kInventorySlots] = {};
+static int gCount[kInventorySlots] = {};
+static int gCursorCount = 0;
 static int gSelected = 0;
 static Block gCursor = Block::Air;
 static int gPress = -1;
@@ -19,11 +24,21 @@ static float gSwap = 0.0f;
 static float gFlash[kInventorySlots] = {};
 static HudMode gHud = HudMode::Playing;
 
-static void putSlot(int index, Block block) {
+static void writeSlot(int index, Block block, int count) {
     if (index < 0 || index >= kInventorySlots) return;
-    if (gSlot[index] == block) return;
+    if (block == Block::Air || count <= 0) {
+        block = Block::Air;
+        count = 0;
+    }
+    if (count > kStackMax) count = kStackMax;
+    if (gSlot[index] == block && gCount[index] == count) return;
     gSlot[index] = block;
+    gCount[index] = count;
     gFlash[index] = 1.0f;
+}
+
+static void putSlot(int index, Block block) {
+    writeSlot(index, block, block == Block::Air ? 0 : 1);
 }
 
 static bool emptyOf(int index) {
@@ -34,27 +49,33 @@ static bool emptyOf(int index) {
 // del inventario lo descarta: el slot queda vacío y el objeto no se duplica.
 static void discardCursor() {
     gCursor = Block::Air;
+    gCursorCount = 0;
 }
 
 static void pickup(int index) {
     if (emptyOf(index)) return;
     gCursor = gSlot[index];
-    putSlot(index, Block::Air);
+    gCursorCount = gCount[index];
+    writeSlot(index, Block::Air, 0);
 }
 
 static void placeOrSwap(int index) {
     if (index < 0 || index >= kInventorySlots || gCursor == Block::Air) return;
     Block there = gSlot[index];
-    putSlot(index, gCursor);
+    int thereN = gCount[index];
+    writeSlot(index, gCursor, gCursorCount);
     gCursor = there;
+    gCursorCount = there == Block::Air ? 0 : thereN;
 }
 
 static void moveSlot(int from, int to) {
     if (from == to || from < 0 || to < 0 || from >= kInventorySlots || to >= kInventorySlots) return;
     Block a = gSlot[from];
     Block b = gSlot[to];
-    putSlot(from, b);
-    putSlot(to, a);
+    int ca = gCount[from];
+    int cb = gCount[to];
+    writeSlot(from, b, cb);
+    writeSlot(to, a, ca);
 }
 
 static bool shiftInto(int from, int begin, int count) {
@@ -63,8 +84,8 @@ static bool shiftInto(int from, int begin, int count) {
     for (int i = 0; i < count; ++i) {
         int dst = begin + i;
         if (gSlot[dst] != Block::Air) continue;
-        putSlot(dst, item);
-        putSlot(from, Block::Air);
+        writeSlot(dst, item, gCount[from]);
+        writeSlot(from, Block::Air, 0);
         return true;
     }
     return false;
@@ -87,9 +108,12 @@ struct SlotInit {
     int index;
 };
 
+static void closeMenu();
+
 void inventoryCancelGesture() {
     gPress = -1;
     gDrag = false;
+    closeMenu();
 }
 
 void inventoryTick(float dt) {
@@ -104,7 +128,10 @@ void inventoryTick(float dt) {
             { Block::Triteleia, 9 }, { Block::TriteleiaRed, 10 },
             { Block::Stone, 11 }, { Block::Obsidian, 12 }
         };
-        for (const SlotInit& item : start) gSlot[item.index] = item.block;
+        for (const SlotInit& item : start) {
+            gSlot[item.index] = item.block;
+            gCount[item.index] = 16;
+        }
         seeded = true;
     }
     gSelVis += ((float)gSelected - gSelVis) * (1.0f - std::exp(-dt * 16.0f));
@@ -134,6 +161,8 @@ void inventorySelect(int slot) {
 int inventorySelected() { return gSelected; }
 
 void inventorySetSlot(int index, Block block) {
+    if (block != Block::Air && index >= 0 && index < kInventorySlots && gSlot[index] == block && gCount[index] > 0)
+        return;
     putSlot(index, block);
 }
 
@@ -166,11 +195,11 @@ const char* inventoryBlockName(Block block) {
 bool inventorySwapOffhand() {
     Block main = gSlot[gSelected];
     Block off = gSlot[kOffhandSlot];
+    int mainN = gCount[gSelected];
+    int offN = gCount[kOffhandSlot];
     if (main == Block::Air && off == Block::Air) return false;
-    gSlot[gSelected] = off;
-    gSlot[kOffhandSlot] = main;
-    gFlash[gSelected] = 1.0f;
-    gFlash[kOffhandSlot] = 1.0f;
+    writeSlot(gSelected, off, offN);
+    writeSlot(kOffhandSlot, main, mainN);
     gSwap = 1.0f;
     return true;
 }
@@ -221,12 +250,19 @@ static void drawSlot(ImDrawList* dl, ImVec2 p, float size, int index, bool selec
     drawWell(dl, p, size, selected, hovered, gFlash[index]);
     if (!hiding(index))
         drawIcon(dl, p, size, gSlot[index], time, pop);
+    if (!hiding(index) && gSlot[index] != Block::Air && gCount[index] > 1) {
+        char label[8];
+        std::snprintf(label, sizeof(label), "%d", gCount[index]);
+        ImVec2 ts = ImGui::CalcTextSize(label);
+        dl->AddText(ImVec2(p.x + size - ts.x - 3.0f, p.y + size - ts.y - 2.0f), IM_COL32(255, 255, 255, 235), label);
+    }
     if (key && key[0])
         dl->AddText(ImVec2(p.x + 3.0f, p.y + 1.0f), IM_COL32(255, 255, 255, 220), key);
 }
 
 static void drawCursorGhost(float time, float size) {
     Block block = gDrag && gPress >= 0 ? gSlot[gPress] : gCursor;
+    int count = gDrag && gPress >= 0 ? gCount[gPress] : gCursorCount;
     if (block == Block::Air) return;
     ImVec2 m = ImGui::GetMousePos();
     float s = size * 0.82f;
@@ -235,6 +271,12 @@ static void drawCursorGhost(float time, float size) {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     if (tex)
         dl->AddImage((ImTextureID)(intptr_t)tex, a, ImVec2(a.x + s, a.y + s), ImVec2(0, 1), ImVec2(1, 0));
+    if (count > 1) {
+        char label[8];
+        std::snprintf(label, sizeof(label), "%d", count);
+        ImVec2 ts = ImGui::CalcTextSize(label);
+        dl->AddText(ImVec2(a.x + s - ts.x, a.y + s - ts.y), IM_COL32(255, 255, 255, 235), label);
+    }
 }
 
 struct SlotHit {
@@ -264,6 +306,171 @@ static int hitAt(ImVec2 m) {
     return -1;
 }
 
+static int gMenuSlot = -1;
+static ImVec2 gMenuPos(0.0f, 0.0f);
+static bool gMenuConfirm = false;
+static bool gMenuFresh = false;
+static ImVec2 gMenuMin(0.0f, 0.0f);
+static ImVec2 gMenuMax(0.0f, 0.0f);
+
+static bool overMenu(ImVec2 m) {
+    return gMenuSlot >= 0 && m.x >= gMenuMin.x && m.y >= gMenuMin.y && m.x < gMenuMax.x && m.y < gMenuMax.y;
+}
+
+static void closeMenu() {
+    gMenuSlot = -1;
+    gMenuConfirm = false;
+    gMenuFresh = false;
+}
+
+static bool takeFrom(int index, int want, Block& block, int& taken) {
+    taken = 0;
+    block = Block::Air;
+    if (index < 0 || index >= kInventorySlots || want <= 0) return false;
+    if (gSlot[index] == Block::Air || gCount[index] <= 0) return false;
+    int n = want < gCount[index] ? want : gCount[index];
+    block = gSlot[index];
+    taken = n;
+    int left = gCount[index] - n;
+    writeSlot(index, left > 0 ? block : Block::Air, left);
+    return true;
+}
+
+int inventoryCount(int index) {
+    if (index < 0 || index >= kInventorySlots || gSlot[index] == Block::Air) return 0;
+    return gCount[index];
+}
+
+static int roomFor(Block block) {
+    if (block == Block::Air) return 0;
+    int room = 0;
+    for (int i = 0; i < kInventorySlots; ++i) {
+        if (gSlot[i] == Block::Air) room += kStackMax;
+        else if (gSlot[i] == block && gCount[i] < kStackMax) room += kStackMax - gCount[i];
+    }
+    return room;
+}
+
+int inventoryAccept(Block block, int count) {
+    if (block == Block::Air || count <= 0) return 0;
+    int left = count;
+    for (int pass = 0; pass < 2 && left > 0; ++pass) {
+        for (int i = 0; i < kInventorySlots && left > 0; ++i) {
+            bool partial = gSlot[i] == block && gCount[i] < kStackMax;
+            bool empty = gSlot[i] == Block::Air;
+            if (pass == 0 && !partial) continue;
+            if (pass == 1 && !empty) continue;
+            int have = empty ? 0 : gCount[i];
+            int add = left < (kStackMax - have) ? left : (kStackMax - have);
+            writeSlot(i, block, have + add);
+            left -= add;
+        }
+    }
+    return count - left;
+}
+
+bool inventoryCanAccept(Block block, int count) {
+    return roomFor(block) >= count;
+}
+
+static bool dropIndex(int index, bool whole) {
+    if (index < 0 || index >= kInventorySlots) return false;
+    Block block = gSlot[index];
+    int have = gCount[index];
+    if (block == Block::Air || have <= 0) return false;
+    int n = whole ? have : 1;
+    if (!droppedItemsQueue(block, n)) return false;
+    Block got = Block::Air;
+    int taken = 0;
+    takeFrom(index, n, got, taken);
+    if (index == gSelected) characterBeginThrow(block);
+    return taken > 0;
+}
+
+bool inventoryDropSelected() { return dropIndex(gSelected, false); }
+
+bool inventoryDropFrom(int index, bool whole) { return dropIndex(index, whole); }
+
+bool inventoryDeleteFrom(int index, bool whole) {
+    Block got = Block::Air;
+    int taken = 0;
+    int want = whole ? inventoryCount(index) : 1;
+    return takeFrom(index, want, got, taken);
+}
+
+bool inventoryContextOpen() { return gMenuSlot >= 0; }
+
+void inventoryCloseContext() { closeMenu(); }
+
+static void drawContextMenu(int width, int height) {
+    if (gMenuSlot < 0) return;
+    if (gSlot[gMenuSlot] == Block::Air || gCount[gMenuSlot] <= 0) {
+        closeMenu();
+        return;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        closeMenu();
+        return;
+    }
+    ImVec2 pos = gMenuPos;
+    const float boxW = 168.0f;
+    const float boxH = gMenuConfirm ? 96.0f : (gCount[gMenuSlot] > 1 ? 132.0f : 78.0f);
+    if (pos.x + boxW > (float)width - 8.0f) pos.x = (float)width - boxW - 8.0f;
+    if (pos.y + boxH > (float)height - 8.0f) pos.y = (float)height - boxH - 8.0f;
+    if (pos.x < 8.0f) pos.x = 8.0f;
+    if (pos.y < 8.0f) pos.y = 8.0f;
+    ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.96f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 6.0f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.08f, 0.09f, 0.96f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.18f, 0.20f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.32f, 0.28f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.34f, 0.42f, 0.28f, 1.0f));
+    ImGui::Begin("ItemMenu", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+    int slot = gMenuSlot;
+    int count = gCount[slot];
+    if (!gMenuConfirm) {
+        if (ImGui::Button("Tirar", ImVec2(148.0f, 0.0f))) {
+            inventoryDropFrom(slot, false);
+            closeMenu();
+        }
+        if (gMenuSlot >= 0 && ImGui::Button("Eliminar", ImVec2(148.0f, 0.0f))) {
+            inventoryDeleteFrom(slot, false);
+            closeMenu();
+        }
+        if (gMenuSlot >= 0 && count > 1 && ImGui::Button("Tirar todo", ImVec2(148.0f, 0.0f))) {
+            inventoryDropFrom(slot, true);
+            closeMenu();
+        }
+        if (gMenuSlot >= 0 && count > 1 && ImGui::Button("Eliminar todo", ImVec2(148.0f, 0.0f)))
+            gMenuConfirm = true;
+    }
+    else {
+        char ask[48];
+        std::snprintf(ask, sizeof(ask), "Eliminar %d?", count);
+        ImGui::TextUnformatted(ask);
+        if (ImGui::Button("Confirmar", ImVec2(148.0f, 0.0f))) {
+            inventoryDeleteFrom(slot, true);
+            closeMenu();
+        }
+        if (gMenuSlot >= 0 && ImGui::Button("Cancelar", ImVec2(148.0f, 0.0f)))
+            gMenuConfirm = false;
+    }
+    ImVec2 wpos = ImGui::GetWindowPos();
+    ImVec2 wsize = ImGui::GetWindowSize();
+    gMenuMin = wpos;
+    gMenuMax = ImVec2(wpos.x + wsize.x, wpos.y + wsize.y);
+    bool inside = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem | ImGuiHoveredFlags_RootAndChildWindows);
+    bool clickOut = ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+    if (gMenuFresh) gMenuFresh = false;
+    else if (clickOut && !inside) closeMenu();
+    ImGui::End();
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleVar(2);
+}
+
 static void consumePointer(ImVec2 winMin, ImVec2 winMax) {
     ImGuiIO& io = ImGui::GetIO();
     ImVec2 m = io.MousePos;
@@ -274,7 +481,22 @@ static void consumePointer(ImVec2 winMin, ImVec2 winMax) {
         float dy = m.y - gPressY;
         if (dx * dx + dy * dy > 36.0f) gDrag = true;
     }
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !overMenu(m)) {
+        if (hover >= 0 && gSlot[hover] != Block::Air && gCursor == Block::Air && !gDrag) {
+            gMenuSlot = hover;
+            gMenuPos = m;
+            gMenuConfirm = false;
+            gMenuFresh = true;
+            gPress = -1;
+        }
+        else closeMenu();
+    }
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && overMenu(m)) {
+    }
+    else if (gMenuSlot >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !overMenu(m)) {
+        closeMenu();
+    }
+    else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         if (hover >= 0) {
             if (io.KeyShift && gCursor == Block::Air && !gDrag) {
                 shiftClick(hover);
@@ -397,5 +619,6 @@ void inventoryDrawScreen(int width, int height, float time) {
     ImGui::End();
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(2);
+    drawContextMenu(width, height);
     drawCursorGhost(time, slot);
 }

@@ -20,18 +20,39 @@ static int gShadowMapSize = 1024;
 static glm::vec3 gHeldPos(0.0f);
 static glm::vec3 gHeldColor(0.0f);
 static float gHeldRange = 0.0f;
+static glm::vec4 gTorchPos[8] = {};
+static glm::vec3 gTorchColor(0.0f);
 
-static void uploadHeldLight(unsigned program) {
+void uploadDynamicLights(unsigned program) {
     auto loc = [&](const char* n) { return glx.GetUniformLocation(program, n); };
     glx.Uniform3f(loc("uHeldPos"), gHeldPos.x, gHeldPos.y, gHeldPos.z);
     glx.Uniform3f(loc("uHeldColor"), gHeldColor.x, gHeldColor.y, gHeldColor.z);
     glx.Uniform1f(loc("uHeldRange"), gHeldRange);
+    glx.Uniform4fv(loc("uTorchPos"), 8, &gTorchPos[0].x);
+    glx.Uniform3f(loc("uTorchColor"), gTorchColor.x, gTorchColor.y, gTorchColor.z);
+}
+
+static void uploadHeldLight(unsigned program) {
+    uploadDynamicLights(program);
 }
 
 void setDynamicPointLight(const glm::vec3& position, const glm::vec3& color, float range) {
     gHeldPos = position;
     gHeldColor = color;
     gHeldRange = range > 0.0f ? range : 0.0f;
+}
+
+void setDroppedTorchLights(const glm::vec3* positions, int count, const glm::vec3& color, float range) {
+    if (count < 0) count = 0;
+    if (count > 8) count = 8;
+    float lit = range > 0.0f ? range : 0.0f;
+    for (int i = 0; i < 8; ++i) {
+        if (positions && i < count)
+            gTorchPos[i] = glm::vec4(positions[i], lit);
+        else
+            gTorchPos[i] = glm::vec4(0.0f);
+    }
+    gTorchColor = color;
 }
 
 static const char* kOpaqueVs = R"GLSL(
@@ -112,6 +133,24 @@ uniform float uShadowSize;
 uniform vec3 uHeldPos;
 uniform vec3 uHeldColor;
 uniform float uHeldRange;
+uniform vec4 uTorchPos[8];
+uniform vec3 uTorchColor;
+
+vec3 addTorchLights(vec3 world, vec3 n) {
+    vec3 sum = vec3(0.0);
+    for (int i = 0; i < 8; ++i) {
+        float range = uTorchPos[i].w;
+        if (range < 0.05) continue;
+        vec3 toL = uTorchPos[i].xyz - world;
+        float dist = length(toL);
+        vec3 dir = toL / max(dist, 0.001);
+        float nd = clamp(dot(n, dir) * 0.65 + 0.35, 0.0, 1.0);
+        float atten = clamp(1.0 - dist / range, 0.0, 1.0);
+        atten *= atten;
+        sum += uTorchColor * nd * atten;
+    }
+    return sum;
+}
 
 float shadowVis(vec3 world, float ndl) {
     if (ndl < 0.02 || uSunAmt < 0.05) return 1.0;
@@ -170,6 +209,7 @@ void main() {
         atten *= atten;
         col += albedo * uHeldColor * nd * atten;
     }
+    col += albedo * addTorchLights(vWorld, n);
     float fog = smoothstep(118.0, 168.0, length(vWorld.xz - uCam.xz));
     col = mix(col, uSky, fog);
     fragColor = vec4(col, alpha);
@@ -335,16 +375,33 @@ uniform vec4 uWakeDir[16];
 uniform vec3 uHeldPos;
 uniform vec3 uHeldColor;
 uniform float uHeldRange;
+uniform vec4 uTorchPos[8];
+uniform vec3 uTorchColor;
 
 vec3 heldGlow(vec3 world, vec3 normal) {
-    if (uHeldRange < 0.05) return vec3(0.0);
-    vec3 toL = uHeldPos - world;
-    float dist = length(toL);
-    vec3 dir = toL / max(dist, 0.001);
-    float nd = clamp(dot(normalize(normal), dir) * 0.65 + 0.35, 0.0, 1.0);
-    float atten = clamp(1.0 - dist / uHeldRange, 0.0, 1.0);
-    atten *= atten;
-    return uHeldColor * nd * atten * 0.65;
+    vec3 n = normalize(normal);
+    vec3 sum = vec3(0.0);
+    if (uHeldRange >= 0.05) {
+        vec3 toL = uHeldPos - world;
+        float dist = length(toL);
+        vec3 dir = toL / max(dist, 0.001);
+        float nd = clamp(dot(n, dir) * 0.65 + 0.35, 0.0, 1.0);
+        float atten = clamp(1.0 - dist / uHeldRange, 0.0, 1.0);
+        atten *= atten;
+        sum += uHeldColor * nd * atten;
+    }
+    for (int i = 0; i < 8; ++i) {
+        float range = uTorchPos[i].w;
+        if (range < 0.05) continue;
+        vec3 toL = uTorchPos[i].xyz - world;
+        float dist = length(toL);
+        vec3 dir = toL / max(dist, 0.001);
+        float nd = clamp(dot(n, dir) * 0.65 + 0.35, 0.0, 1.0);
+        float atten = clamp(1.0 - dist / range, 0.0, 1.0);
+        atten *= atten;
+        sum += uTorchColor * nd * atten;
+    }
+    return sum * 0.65;
 }
 
 float ringField(vec2 p, out vec2 grad) {

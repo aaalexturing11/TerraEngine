@@ -7,6 +7,7 @@ constexpr int kHotbarSlots = 9;
 constexpr int kMainSlots = 27;
 constexpr int kOffhandSlot = 36;
 constexpr int kInventorySlots = 37;
+constexpr int kStackMax = 64;
 
 enum class HudMode { Playing = 0, Hidden = 1, Clean = 2 };
 
@@ -27,3 +28,12 @@ void inventoryCycleHud();
 
 void inventoryDrawHotbar(int width, int height, float time);
 void inventoryDrawScreen(int width, int height, float time);
+
+int inventoryCount(int index);
+int inventoryAccept(Block block, int count);
+bool inventoryCanAccept(Block block, int count);
+bool inventoryDropSelected();
+bool inventoryDropFrom(int index, bool whole);
+bool inventoryDeleteFrom(int index, bool whole);
+bool inventoryContextOpen();
+void inventoryCloseContext();

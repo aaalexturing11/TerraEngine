@@ -103,6 +103,8 @@ static float gSwingRate = 5.0f;
 static float gSwingVis = 0.0f;
 static bool gMine = true;
 static Block gSeenMain = Block::Air;
+static float gThrow = 0.0f;
+static Block gThrowItem = Block::Air;
 static Block gSeenOff = Block::Air;
 static bool gHandsPrimed = false;
 static float gRaiseR = 0.0f;
@@ -179,6 +181,8 @@ uniform float uBlockLight;
 uniform vec3 uHeldPos;
 uniform vec3 uHeldColor;
 uniform float uHeldRange;
+uniform vec4 uTorchPos[8];
+uniform vec3 uTorchColor;
 uniform mat4 uShadowMat;
 uniform float uShadowSize;
 uniform float uFog;
@@ -228,6 +232,17 @@ void main() {
         float atten = clamp(1.0 - dist / uHeldRange, 0.0, 1.0);
         atten *= atten;
         held = albedo * uHeldColor * nd * atten;
+    }
+    for (int i = 0; i < 8; ++i) {
+        float range = uTorchPos[i].w;
+        if (range < 0.05) continue;
+        vec3 toL = uTorchPos[i].xyz - vWorld;
+        float dist = length(toL);
+        vec3 dir = toL / max(dist, 0.001);
+        float nd = clamp(dot(n, dir) * 0.65 + 0.35, 0.0, 1.0);
+        float atten = clamp(1.0 - dist / range, 0.0, 1.0);
+        atten *= atten;
+        held += albedo * uTorchColor * nd * atten;
     }
     vec3 col = indirect + lampCol + sun + shadowSky + moon + held;
     if (uFog > 0.5) {
@@ -808,7 +823,7 @@ static void updateHands(float dt, Block mainItem, Block offItem) {
             gDipL = 1.0f;
             gDipFromL = gSeenOff;
         }
-        if (mainItem == Block::Air && gSeenMain != Block::Air) gStowR = gSeenMain;
+        if (mainItem == Block::Air && gSeenMain != Block::Air && gThrow < 0.01f) gStowR = gSeenMain;
         if (offItem == Block::Air && gSeenOff != Block::Air) gStowL = gSeenOff;
     }
     if (gDip > 0.0f) {
@@ -847,6 +862,7 @@ static void updateHands(float dt, Block mainItem, Block offItem) {
     }
     else {
         gVis.rightBlock = mainItem != Block::Air ? mainItem : gStowR;
+        if (gThrowItem != Block::Air && gThrow > 0.58f) gVis.rightBlock = gThrowItem;
         gVis.leftBlock = offItem != Block::Air ? offItem : gStowL;
         if (gDip > 0.5f && gDipFrom != Block::Air) gVis.rightBlock = gDipFrom;
         if (gDipL > 0.5f && gDipFromL != Block::Air) gVis.leftBlock = gDipFromL;
@@ -1275,6 +1291,13 @@ void characterSync(float dt, float time, bool motionLocked) {
         if (gPlantSide <= 0) aimGrip(true, motion.gripL, gArmFwdL, gArmYawL);
     }
     if (motion.recover <= 0.0f) armR += gSwingVis * (gMine ? 1.45f : 0.72f);
+    bool pinned = motion.gripping || motion.recover > 0.0f
+        || mode == MoveMode::Vault || mode == MoveMode::Roll
+        || mode == MoveMode::LedgeHang || mode == MoveMode::LedgeClimb || mode == MoveMode::LedgeJump;
+    if (gThrow > 0.0f && !pinned) {
+        float bell = std::sin((1.0f - gThrow) * 3.14159265f);
+        armR = glm::mix(armR, 1.42f, bell);
+    }
     gPose.armR = damp(gPose.armR, armR, dt, 12.0f);
     gPose.armL = damp(gPose.armL, armL, dt, 12.0f);
     gPose.legR = damp(gPose.legR, legR, dt, legDamp);
@@ -1300,6 +1323,22 @@ void characterCueAction(bool mining) {
     gSwing = 1.0f;
     gSwingRate = mining ? 2.6f : 3.6f;
     gMine = mining;
+}
+
+void characterBeginThrow(Block block) {
+    if (block == Block::Air) return;
+    gThrowItem = block;
+    gThrow = 1.0f;
+    gStowR = Block::Air;
+}
+
+void characterTickThrow(float dt) {
+    if (gThrow <= 0.0f) return;
+    if (dt < 0.0f) dt = 0.0f;
+    if (dt > 0.05f) dt = 0.05f;
+    gThrow -= dt * 3.2f;
+    if (gThrow <= 0.58f) gThrowItem = Block::Air;
+    if (gThrow < 0.0f) gThrow = 0.0f;
 }
 
 void characterHeldLight(glm::vec3& position, glm::vec3& color, float& range) {
@@ -1368,9 +1407,7 @@ static void bindCharacter(const DayNightLighting& light, float sky, float lamp, 
     glx.Uniform1f(loc("uSunAmt"), light.sunIntensity);
     glx.Uniform1f(loc("uSkyLight"), sky);
     glx.Uniform1f(loc("uBlockLight"), lamp);
-    glx.Uniform3f(loc("uHeldPos"), gLightPos.x, gLightPos.y, gLightPos.z);
-    glx.Uniform3f(loc("uHeldColor"), gLightColor.x, gLightColor.y, gLightColor.z);
-    glx.Uniform1f(loc("uHeldRange"), gLightRange);
+    uploadDynamicLights(gProg);
     glm::mat4 shadow(1.0f);
     float shadowSize = 1024.0f;
     worldShadowParams(shadow, shadowSize);
@@ -1491,6 +1528,9 @@ static void drawHeld(const glm::mat4& item, Block block, float sky, float lamp, 
         side(glm::vec3(-1, 0, 0));
         side(glm::vec3(0, 0, 1));
         side(glm::vec3(0, 0, -1));
+        pushHeldQuad(batch, item, glm::vec3(0, -1, 0),
+            base + glm::vec3(-h, 0, -h), base + glm::vec3(h, 0, -h), base + glm::vec3(h, 0, h), base + glm::vec3(-h, 0, h),
+            flame, true, sky, lamp, glm::vec3(1), 0.2f, tu0, tv1 - 1.0f / 16.0f, tu1, tv1);
         pushHeldQuad(batch, item, glm::vec3(0, 1, 0),
             tip + glm::vec3(-h, 0, h), tip + glm::vec3(h, 0, h), tip + glm::vec3(h, 0, -h), tip + glm::vec3(-h, 0, -h),
             flame, true, sky, lamp, glm::vec3(1), 0.8f, tu0, tv1 - 1.0f / 16.0f, tu1, tv1);
@@ -1516,6 +1556,16 @@ static void drawHeld(const glm::mat4& item, Block block, float sky, float lamp, 
         face({ 1, 0, 0 }, { s, -s, s }, { s, -s, -s }, { s, s, -s }, { s, s, s }, draw.side);
         face({ -1, 0, 0 }, { -s, -s, -s }, { -s, -s, s }, { -s, s, s }, { -s, s, -s }, draw.side);
     }
+}
+
+void renderLooseItem(const glm::mat4& world, Block block, const DayNightLighting& light, float sky, float lamp, float time) {
+    if (!gReady || block == Block::Air) return;
+    bindOpaqueShader(light, time);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    glDepthMask(GL_TRUE);
+    drawHeld(world, block, sky, lamp, time);
 }
 
 static void loadCamera() {

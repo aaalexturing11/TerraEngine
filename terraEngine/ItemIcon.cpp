@@ -77,6 +77,9 @@ static void drawTorchMesh(unsigned tex) {
     face(1.0f, tex, glm::vec3(1.0f),
         { -half, y1, half }, { half, y1, half }, { half, y1, -half }, { -half, y1, -half },
         u0, v1 - 1.0f / 16.0f, u1, v1);
+    face(0.45f, tex, glm::vec3(1.0f),
+        { -half, y0, -half }, { half, y0, -half }, { half, y0, half }, { -half, y0, half },
+        u0, v1 - 1.0f / 16.0f, u1, v1);
 }
 
 static void paint(Block block, unsigned torchTex) {

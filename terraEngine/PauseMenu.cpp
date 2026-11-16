@@ -1,6 +1,7 @@
 #include "PauseMenu.h"
 #include "BlockSelection.h"
 #include "Camera.h"
+#include "Inventory.h"
 #include "Renderer.h"
 #include "World.h"
 
@@ -326,8 +327,11 @@ void pauseMenuUpdateInput(GLFWwindow* window, PauseMenuState& state) {
     if (escDown && !escPressedLastFrame) {
         if (gameScreen == GameScreen::Playing) {
             if (inventoryOpen()) {
-                setInventoryOpen(false);
-                cameraResetMouse();
+                if (inventoryContextOpen()) inventoryCloseContext();
+                else {
+                    setInventoryOpen(false);
+                    cameraResetMouse();
+                }
             }
             else {
                 paused = !paused;

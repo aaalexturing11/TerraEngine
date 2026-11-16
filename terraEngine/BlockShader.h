@@ -5,6 +5,8 @@
 
 bool initBlockShaders();
 void setDynamicPointLight(const glm::vec3& position, const glm::vec3& color, float range);
+void setDroppedTorchLights(const glm::vec3* positions, int count, const glm::vec3& color, float range);
+void uploadDynamicLights(unsigned program);
 void beginShadowPass(const DayNightLighting& light, const glm::vec3& focus, int mapSize);
 void endShadowPass(int viewW, int viewH);
 void bindOpaqueShader(const DayNightLighting& light, float time);

@@ -1,6 +1,6 @@
 name=Nuevo mundo
 seed=999
-sx=804
+sx=810
 sy=8
-sz=309
-day=980.678
+sz=311
+day=1707.978

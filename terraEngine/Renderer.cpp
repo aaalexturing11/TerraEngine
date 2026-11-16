@@ -729,7 +729,8 @@ static void drawTorch(int bx, int by, int bz) {
     side(-right);
     side(fwd);
     side(-fwd);
-    glm::vec2 b00(u0, v0), b10(u1, v0), b11(u1, v0 + 1.0f / 16.0f), b01(u0, v0 + 1.0f / 16.0f);
+    float stick = v1 - 1.0f / 16.0f;
+    glm::vec2 b00(u0, stick), b10(u1, stick), b11(u1, v1), b01(u0, v1);
     glm::vec2 f00(u0, v1 - 1.0f / 16.0f), f10(u1, v1 - 1.0f / 16.0f), f11(u1, v1), f01(u0, v1);
     drawCutoutQuad(bx, by, bz, tex, -axis,
         base - right * half - fwd * half, base + right * half - fwd * half,

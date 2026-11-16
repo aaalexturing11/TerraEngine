@@ -141,6 +141,7 @@
     <ClInclude Include="GlExt.h" />
     <ClInclude Include="GlIncludes.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="DroppedItems.h" />
     <ClInclude Include="Inventory.h" />
     <ClInclude Include="ItemIcon.h" />
     <ClInclude Include="Lighting.h" />
@@ -163,6 +164,7 @@
     <ClCompile Include="Clouds.cpp" />
     <ClCompile Include="FluidSolver.cpp" />
     <ClCompile Include="GlExt.cpp" />
+    <ClCompile Include="DroppedItems.cpp" />
     <ClCompile Include="Inventory.cpp" />
     <ClCompile Include="ItemIcon.cpp" />
     <ClCompile Include="Lighting.cpp" />

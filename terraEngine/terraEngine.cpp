@@ -13,6 +13,7 @@
 #include "BlockShader.h"
 #include "Camera.h"
 #include "Character.h"
+#include "DroppedItems.h"
 #include "Clouds.h"
 #include "FluidSolver.h"
 #include "Inventory.h"
@@ -202,6 +203,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         if (inWorld && !paused && fDown && !fWasDown)
             inventorySwapOffhand();
         fWasDown = fDown;
+        static bool gWasDown = false;
+        bool gDown = glfwGetKey(window, GLFW_KEY_G) == GLFW_PRESS;
+        if (inWorld && !paused && !inventoryOpen() && gDown && !gWasDown)
+            inventoryDropSelected();
+        gWasDown = gDown;
         static bool f1WasDown = false;
         bool f1Down = glfwGetKey(window, GLFW_KEY_F1) == GLFW_PRESS;
         if (inWorld && !paused && f1Down && !f1WasDown)
@@ -222,6 +228,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             float frameDt = (float)(frameStart - lastFrameTime);
             inventoryTick(frameDt);
             cameraUpdateMovement(window, !uiOpen, frameDt);
+            if (!paused) {
+                droppedItemsUpdate(frameDt);
+                characterTickThrow(frameDt);
+            }
             characterSync(frameDt, time, uiOpen);
             generated = worldStreamAround((float)camX, (float)camZ);
             setMeshBudget(1);
@@ -297,10 +307,16 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         float heldRange = 0.0f;
         characterHeldLight(heldPos, heldCol, heldRange);
         setDynamicPointLight(heldPos, heldCol, heldRange);
+        glm::vec3 torchTips[8];
+        int torchCount = droppedItemsTorchLights(torchTips, 8, 18.0f);
+        float flick = 0.94f + 0.06f * std::sin(time * 11.0f) * std::sin(time * 7.13f);
+        glm::vec3 torchCol = glm::vec3(1.05f, 0.56f, 0.22f) * (1.65f * flick);
+        setDroppedTorchLights(torchTips, torchCount, torchCol, 13.0f);
         bindOpaqueShader(light, time);
         renderOpaqueBlocks(renderRadiusXZ, renderMaxY);
         renderClouds(light, time);
         renderPlayerCharacter(light, time);
+        droppedItemsDraw(light, time, cameraPosition(), cameraLookDirection());
 
         blitSceneForWater();
         bindWaterInputs();
