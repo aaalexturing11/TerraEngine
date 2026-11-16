@@ -1,6 +1,0 @@
-name=Nueva mazmorra
-seed=2728825629
-sx=70
-sy=7
-sz=-213
-day=229.785
